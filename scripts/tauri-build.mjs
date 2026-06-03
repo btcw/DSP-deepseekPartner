@@ -90,7 +90,7 @@ async function buildStableMacPackage(args) {
   fs.mkdirSync(dmgDir, { recursive: true });
   await ensureValidMacSignature(appPath);
   await createSimpleDmg({ appPath, dmgPath, productName });
-  await run("hdiutil", ["verify", dmgPath]);
+  await verifyDmg(dmgPath);
 
   console.log(`    Finished macOS bundles at:
         ${appPath}
@@ -130,6 +130,25 @@ async function createSimpleDmg({ appPath, dmgPath, productName }) {
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+}
+
+async function verifyDmg(dmgPath) {
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    const code = await run("hdiutil", ["verify", dmgPath], { allowFailure: true });
+    if (code === 0) {
+      return;
+    }
+    if (attempt === 6) {
+      throw new Error(`hdiutil verify failed after ${attempt} attempts`);
+    }
+    await sleep(2000 * attempt);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function run(command, args, options = {}) {
