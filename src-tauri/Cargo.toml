@@ -2,7 +2,7 @@
 name = "deepseek-gateway-desktop"
 version = "1.0.0"
 description = "A desktop gateway for DeepSeek-compatible agent clients"
-authors = ["DeepSeek Gateway Contributors"]
+authors = ["DSP-deepseekPartner Contributors"]
 edition = "2021"
 
 [lib]

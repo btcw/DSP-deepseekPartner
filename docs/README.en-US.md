@@ -1,0 +1,182 @@
+# DSP-deepseekPartner
+
+Language: [简体中文](../README.md) | **English** | [日本語](README.ja-JP.md)
+
+DSP-deepseekPartner is an independent macOS and Windows desktop app that provides local DeepSeek proxy profiles for Android Studio AI, Copilot-style third-party plugins, Claude Code, Cline, Roo, Kilo, and other tools that support custom AI sources.
+
+It is not an official DeepSeek application. API keys are supplied by your client requests; the app never stores or embeds API keys.
+
+## What It Solves
+
+Many IDE assistants and agent clients support OpenAI-compatible or Anthropic-compatible APIs, while DeepSeek has specific requirements around thinking, reasoning, tool calls, and streaming responses.
+
+DSP-deepseekPartner starts a local `127.0.0.1:<port>` proxy, forwards client requests to DeepSeek, and normalizes these differences:
+
+- DeepSeek thinking mode may require `reasoning_content` to be sent back after tool calls.
+- Claude Code may send `thinking.type = "adaptive"`, which DeepSeek does not support directly.
+- Some clients render streamed `thinking` / `reasoning_content` chunks as awkward spaces or sudden line breaks.
+- Different plugins use different routes, model names, and effort parameter formats.
+
+## Local API Surfaces
+
+Anthropic-compatible:
+
+```text
+POST /v1/messages
+POST /anthropic/v1/messages
+GET  /anthropic/v1/models
+```
+
+OpenAI-compatible:
+
+```text
+POST /v1/chat/completions
+POST /chat/completions
+POST /anthropic/chat/completions
+```
+
+`/anthropic/chat/completions` exists for clients that combine an Anthropic base path with OpenAI chat completions.
+
+## Client Scenarios
+
+- Android Studio AI: use an Anthropic-compatible custom source pointed at the local proxy.
+- Copilot-style third-party plugins: plugins with custom OpenAI or Anthropic Base URL support can connect through the proxy.
+- Claude Code: compatibility for `thinking.type=adaptive`, effort mapping, reasoning replay, and streamed thinking.
+- Cline / Roo / Kilo / other agent clients: any client that supports custom OpenAI/Anthropic API endpoints can connect.
+
+## Features
+
+- GUI profile management for multiple local proxy services.
+- One `127.0.0.1:<port>` service per profile.
+- Start/stop one profile or all profiles.
+- Copy Anthropic/OpenAI proxy URLs and Claude Code environment snippets.
+- Live logs with request ID, status, latency, and upstream error body.
+- Redaction for `Authorization`, `x-api-key`, and token-like values.
+- Runtime-editable name, upstream URL, model mapping, timeout, log level, and feature toggles.
+- Port changes require stopping the service first.
+- Deleting a running profile stops it before deletion.
+
+## Quick Start
+
+1. Download the installer from the [Release page](https://github.com/btcw/DSP-deepseekPartner/releases).
+2. Open DSP-deepseekPartner.
+3. Add a profile:
+   - Port: `17777`
+   - Upstream URL: `https://api.deepseek.com`
+   - API Surfaces: enable Anthropic and/or OpenAI as needed
+4. Click Start.
+5. Copy the proxy URL or environment snippet into your IDE, plugin, or agent client.
+
+## Android Studio AI
+
+If Android Studio AI supports an Anthropic-compatible custom source:
+
+```text
+Schema: Anthropic-compatible
+Base URL: http://127.0.0.1:17777/anthropic
+API Key: your DeepSeek API key
+Model: deepseek-v4-pro[1m]
+```
+
+Model refresh endpoint:
+
+```text
+http://127.0.0.1:17777/anthropic/v1/models
+```
+
+## Copilot-Style Plugins
+
+For plugins that support an OpenAI-compatible custom source:
+
+```text
+Schema: OpenAI-compatible
+Base URL: http://127.0.0.1:17777/v1
+API Key: your DeepSeek API key
+Model: deepseek-v4-pro[1m]
+```
+
+For plugins that support an Anthropic-compatible custom source:
+
+```text
+Schema: Anthropic-compatible
+Base URL: http://127.0.0.1:17777/anthropic
+API Key: your DeepSeek API key
+Model: deepseek-v4-pro[1m]
+```
+
+Copilot-style plugins here means IDE plugins that support custom third-party AI sources. It does not imply that official GitHub Copilot can be pointed to a third-party source.
+
+## Claude Code Snippet
+
+macOS / Linux:
+
+```sh
+export ANTHROPIC_BASE_URL=http://127.0.0.1:17777/anthropic
+export ANTHROPIC_AUTH_TOKEN=<your DeepSeek API Key>
+export ANTHROPIC_MODEL=deepseek-v4-pro[1m]
+export ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro[1m]
+export ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-pro[1m]
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
+export CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash
+export CLAUDE_CODE_EFFORT_LEVEL=max
+```
+
+Windows PowerShell:
+
+```powershell
+$env:ANTHROPIC_BASE_URL="http://127.0.0.1:17777/anthropic"
+$env:ANTHROPIC_AUTH_TOKEN="<your DeepSeek API Key>"
+$env:ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
+$env:ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
+$env:ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"
+$env:ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
+$env:CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
+$env:CLAUDE_CODE_EFFORT_LEVEL="max"
+```
+
+## Development
+
+```sh
+npm install
+npm run tauri:dev
+```
+
+Frontend checks:
+
+```sh
+npm test
+npm run build
+```
+
+Rust tests:
+
+```sh
+cd src-tauri
+cargo test
+```
+
+Build installers:
+
+```sh
+npm run tauri:build:mac
+npm run tauri:build:windows
+```
+
+Debug binary only:
+
+```sh
+npm run tauri:build:binary
+```
+
+## Distribution
+
+- macOS Apple Silicon / ARM64 packages include `macos-arm64` in the filename.
+- Windows x64 packages include `windows-x64` in the filename.
+- Unsigned and unnotarized macOS builds may still trigger Apple Gatekeeper warnings after download.
+
+## Safety
+
+- The proxy listens on `127.0.0.1` by default.
+- The app does not store DeepSeek API keys.
+- Logs redact sensitive headers and token-like values.
+- Client setup is copy-only; the app does not automatically modify Android Studio, Claude Code, Cline, Roo, Kilo, or plugin configuration files.

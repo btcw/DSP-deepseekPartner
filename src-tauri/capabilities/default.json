@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default desktop permissions for DeepSeek Gateway.",
+  "description": "Default desktop permissions for DSP-deepseekPartner.",
   "windows": ["main"],
   "permissions": [
     "core:default",

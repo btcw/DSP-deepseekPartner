@@ -1,86 +1,75 @@
-# DeepSeek Gateway
+# DSP-deepseekPartner
 
-![DeepSeek Gateway hero](docs/assets/hero.svg)
+语言切换：**简体中文** | [English](docs/README.en-US.md) | [日本語](docs/README.ja-JP.md)
 
-**DeepSeek Gateway** is a macOS and Windows desktop app that runs local DeepSeek proxy profiles for IDE AI tools, agent clients, and plugins that support custom OpenAI-compatible or Anthropic-compatible endpoints.
+DSP-deepseekPartner 是一个独立的 macOS / Windows 桌面应用，用来为 Android Studio AI、Copilot 类第三方插件、Claude Code、Cline、Roo、Kilo 等支持自定义 AI 源的工具提供本地 DeepSeek 代理。
 
-It is designed for DeepSeek + Claude Code style compatibility problems: `reasoning_content` replay, SSE thinking streams, unsupported `thinking.type=adaptive`, effort mapping, and model defaults such as `deepseek-v4-pro[1m]`.
+它不是 DeepSeek 官方应用。API Key 由客户端请求携带，应用不会保存或内置 API Key。
 
-> This project is not an official DeepSeek application. API keys are supplied by your client and are never stored by the desktop app.
+## 它解决什么问题
 
-## 多语言简介
+很多 IDE AI 工具和 Agent 客户端支持 OpenAI-compatible 或 Anthropic-compatible API，但 DeepSeek 在 thinking/reasoning、工具调用和流式返回上有一些兼容要求。
 
-**中文**  
-DeepSeek Gateway 是一个本地桌面网关。你可以在应用里添加多个代理配置，点击启动后得到 `http://127.0.0.1:<port>` 本地地址，然后把 Android Studio AI、Copilot 类插件、Claude Code、Cline、Roo、Kilo 等支持自定义三方 AI 源的工具指向这个地址。它会把 Anthropic/OpenAI 兼容请求转发到 DeepSeek，并处理 DeepSeek thinking/reasoning 的兼容细节。
+DSP-deepseekPartner 在本地启动 `127.0.0.1:<port>` 代理，把客户端请求转发到 DeepSeek，并处理这些差异：
 
-**English**  
-DeepSeek Gateway is a local desktop gateway for DeepSeek. Create profiles, start a localhost proxy, then point Android Studio AI, Copilot-style plugins, Claude Code, Cline, Roo, Kilo, or any tool with custom OpenAI/Anthropic base URL support to the gateway.
+- DeepSeek thinking mode 要求工具调用后回传 `reasoning_content`。
+- Claude Code 可能发送 `thinking.type = "adaptive"`，DeepSeek 不支持这个参数。
+- 某些客户端会把 SSE 里的 `thinking` / `reasoning_content` 渲染成很碎的文字、空格或突兀换行。
+- 不同插件使用的路由、模型名、effort 参数格式不一致。
 
-**日本語**  
-DeepSeek Gateway は DeepSeek 用のローカルデスクトップゲートウェイです。プロファイルを作成してローカルプロキシを起動し、Android Studio AI、Copilot 系プラグイン、Claude Code などのカスタム OpenAI/Anthropic エンドポイント対応ツールから利用できます。
+## 支持的本地接口
 
-## Why
+Anthropic-compatible：
 
-Many IDE assistants and agent clients speak Anthropic or OpenAI-compatible APIs, while DeepSeek has important thinking/reasoning requirements:
+```text
+POST /v1/messages
+POST /anthropic/v1/messages
+GET  /anthropic/v1/models
+```
 
-- DeepSeek may require `reasoning_content` to be passed back after tool calls.
-- Some clients stream `thinking` or `reasoning_content` in tiny chunks that render awkwardly.
-- Claude Code can send `thinking.type = "adaptive"`, which DeepSeek does not accept directly.
-- Different clients expect different routes, model names, and effort parameters.
+OpenAI-compatible：
 
-DeepSeek Gateway sits between the client and DeepSeek API and normalizes these differences locally.
+```text
+POST /v1/chat/completions
+POST /chat/completions
+POST /anthropic/chat/completions
+```
 
-![Gateway request flow](docs/assets/flow.svg)
+其中 `/anthropic/chat/completions` 用于兼容一些把 Anthropic base path 和 OpenAI chat completions 混用的客户端。
 
-## Client Support
+## 支持的客户端场景
 
-![Supported clients](docs/assets/clients.svg)
+- Android Studio AI：使用 Anthropic-compatible schema 指向本地代理。
+- Copilot 类第三方插件：支持自定义 OpenAI 或 Anthropic Base URL 的插件可以接入。
+- Claude Code：处理 `thinking.type=adaptive`、effort 映射、reasoning replay 等 DeepSeek 兼容问题。
+- Cline / Roo / Kilo / 其它 Agent 客户端：只要支持自定义 OpenAI/Anthropic API 地址即可接入。
 
-Supported local API surfaces:
+## 主要功能
 
-- Anthropic-compatible:
-  - `POST /v1/messages`
-  - `POST /anthropic/v1/messages`
-  - `GET /anthropic/v1/models`
-- OpenAI-compatible:
-  - `POST /v1/chat/completions`
-  - `POST /chat/completions`
-  - `POST /anthropic/chat/completions` for clients that mix Anthropic base paths with OpenAI chat completions
+- 图形化管理多个本地代理配置。
+- 每个配置一个 `127.0.0.1:<port>` 本地服务。
+- 一键启动/停止单个配置或全部配置。
+- 复制 Anthropic/OpenAI 代理链接和 Claude Code 环境变量片段。
+- 查看实时日志，请求 ID、状态码、延迟和上游错误体。
+- 自动脱敏 `Authorization`、`x-api-key` 和 token-like 内容。
+- 启动后可动态修改名称、上游 URL、模型映射、超时、日志等级和特性开关。
+- 端口修改需要先停止服务。
+- 删除运行中的配置时会先停止服务再删除。
 
-Works well with:
+## 快速开始
 
-- Android Studio AI using an Anthropic-compatible custom source.
-- Copilot-style IDE plugins that allow custom OpenAI or Anthropic base URLs.
-- Claude Code, Cline, Roo, Kilo, and agent clients that support third-party AI providers.
-
-## Features
-
-- Profile list home screen with start/stop, edit, delete, copy URL, and live logs.
-- One local proxy per profile, bound to `127.0.0.1` only.
-- Anthropic + OpenAI-compatible DeepSeek proxy routes.
-- Claude Code compatibility for `thinking.type=adaptive`.
-- DeepSeek thinking/reasoning support with streamed `thinking` / `reasoning_content` accumulation and replay after tool calls.
-- Smooth SSE text coalescing for clients that display tiny streamed chunks poorly.
-- Model defaults for `deepseek-v4-pro[1m]` and `deepseek-v4-flash`.
-- Redacted logs for `Authorization`, `x-api-key`, and token-like values.
-- macOS `.app/.dmg` and Windows MSI/NSIS build workflow.
-
-## Quick Setup
-
-1. Download the latest release for your platform.
-2. Open DeepSeek Gateway.
-3. Add a profile:
+1. 从 [Release 页面](https://github.com/btcw/DSP-deepseekPartner/releases) 下载对应系统的安装包。
+2. 打开 DSP-deepseekPartner。
+3. 新增配置：
    - Port: `17777`
    - Upstream URL: `https://api.deepseek.com`
-   - API surfaces: Anthropic and/or OpenAI
-4. Click **Start**.
-5. Copy the proxy URL or client snippet from the profile card.
+   - API Surfaces: Anthropic / OpenAI 按需启用
+4. 点击 Start。
+5. 复制代理链接或环境变量片段到你的 IDE / 插件 / Agent 客户端。
 
-The app does not store or embed DeepSeek API keys. Send keys from the IDE/plugin/client request, for example through the client’s API key field, `Authorization` header, or environment variables.
+## Android Studio AI 配置
 
-## Android Studio AI
-
-For Android Studio AI or similar JetBrains/IDE tools that support Anthropic-compatible custom providers:
+如果 Android Studio AI 支持 Anthropic-compatible custom source，可以这样配置：
 
 ```text
 Schema: Anthropic-compatible
@@ -89,17 +78,15 @@ API Key: your DeepSeek API key
 Model: deepseek-v4-pro[1m]
 ```
 
-The gateway also serves:
+模型刷新接口：
 
 ```text
 http://127.0.0.1:17777/anthropic/v1/models
 ```
 
-This helps clients refresh model lists without calling DeepSeek directly.
+## Copilot 类插件配置
 
-## Copilot-Style Plugins
-
-For Copilot-style or third-party IDE plugins that allow custom OpenAI-compatible endpoints:
+如果插件支持 OpenAI-compatible custom source：
 
 ```text
 Schema: OpenAI-compatible
@@ -108,7 +95,7 @@ API Key: your DeepSeek API key
 Model: deepseek-v4-pro[1m]
 ```
 
-For plugins that expect Anthropic-compatible endpoints:
+如果插件支持 Anthropic-compatible custom source：
 
 ```text
 Schema: Anthropic-compatible
@@ -117,9 +104,11 @@ API Key: your DeepSeek API key
 Model: deepseek-v4-pro[1m]
 ```
 
-## Claude Code Snippet
+这里的 Copilot 类插件指支持自定义三方 AI 源的 IDE 插件，不表示官方 GitHub Copilot 可以直接修改三方源。
 
-For a profile on port `17777`, use the app's copy button or set:
+## Claude Code 片段
+
+macOS / Linux:
 
 ```sh
 export ANTHROPIC_BASE_URL=http://127.0.0.1:17777/anthropic
@@ -132,7 +121,7 @@ export CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash
 export CLAUDE_CODE_EFFORT_LEVEL=max
 ```
 
-PowerShell:
+Windows PowerShell:
 
 ```powershell
 $env:ANTHROPIC_BASE_URL="http://127.0.0.1:17777/anthropic"
@@ -145,55 +134,49 @@ $env:CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
 $env:CLAUDE_CODE_EFFORT_LEVEL="max"
 ```
 
-## Development
+## 开发
 
 ```sh
 npm install
 npm run tauri:dev
 ```
 
-Frontend checks:
+前端检查：
 
 ```sh
-npm run dev
 npm test
 npm run build
 ```
 
-Rust tests:
+Rust 测试：
 
 ```sh
 cd src-tauri
 cargo test
 ```
 
-Build normal desktop packages:
-
-```sh
-npm run tauri:build
-```
-
-Platform-specific package commands:
+构建安装包：
 
 ```sh
 npm run tauri:build:mac
 npm run tauri:build:windows
 ```
 
-For local backend debugging only:
+仅构建调试二进制：
 
 ```sh
 npm run tauri:build:binary
 ```
 
-## Distribution Notes
+## 发布说明
 
-Unsigned macOS builds copied from cloud drives or downloaded from the internet may show Apple's malware verification warning. Public macOS distribution requires Apple Developer ID signing and notarization. Windows users get the cleanest install experience when MSI/NSIS installers are signed with a code-signing certificate.
+- macOS Apple Silicon / ARM64 包名包含 `macos-arm64`。
+- Windows x64 包名包含 `windows-x64`。
+- macOS 包如果没有 Apple Developer ID 签名和 notarization，从浏览器或云盘下载后仍可能出现 Gatekeeper 验证提示。
 
-## Safety
+## 安全说明
 
-- Default bind address is `127.0.0.1`.
-- Port changes require the gateway to be stopped.
-- Deleting a running profile stops the gateway first.
-- Logs redact API key headers and token-shaped values.
-- Client setup is copy-only; the app does not automatically modify Claude Code, Android Studio, Copilot plugin, Cline, Roo, or Kilo configuration files.
+- 默认只监听 `127.0.0.1`。
+- 应用不保存 DeepSeek API Key。
+- 日志会脱敏敏感 header 和 token-like 内容。
+- 客户端配置仅提供复制片段，不会自动改写 Android Studio、Claude Code、Cline、Roo、Kilo 或其它插件配置文件。

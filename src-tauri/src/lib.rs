@@ -86,7 +86,7 @@ pub fn run() {
             {
                 use tauri::tray::TrayIconBuilder;
                 let _tray = TrayIconBuilder::with_id("main")
-                    .tooltip("DeepSeek Gateway")
+                    .tooltip("DSP-deepseekPartner")
                     .build(app)?;
             }
 
@@ -112,21 +112,21 @@ pub fn run() {
             commands::copy_proxy_text
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run DeepSeek Gateway");
+        .expect("failed to run DSP-deepseekPartner");
 }
 
 pub fn run_headless() {
     let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     runtime.block_on(async {
         let (config_dir, log_dir) =
-            default_app_dirs().expect("failed to resolve DeepSeek Gateway app dirs");
+            default_app_dirs().expect("failed to resolve DSP-deepseekPartner app dirs");
         let profiles = ProfileStore::new(config_dir);
         let logs = LogStore::new(log_dir);
         let gateways = Arc::new(Mutex::new(HashMap::<String, GatewayRegistry>::new()));
         let loaded_profiles = profiles
             .list()
             .await
-            .expect("failed to load DeepSeek Gateway profiles");
+            .expect("failed to load DSP-deepseekPartner profiles");
 
         for profile in loaded_profiles {
             let profile_id = profile.id.clone();

@@ -2,7 +2,7 @@
 
 ## 1.0.0 - 2026-06-04
 
-Initial public release of DeepSeek Gateway.
+Initial public release of DSP-deepseekPartner.
 
 - Cross-platform Tauri desktop app for managing local DeepSeek proxy profiles.
 - Anthropic-compatible and OpenAI-compatible local routes.
