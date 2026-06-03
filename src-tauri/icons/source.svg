@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="202" y1="154" x2="822" y2="870" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2F75FF"/>
+      <stop offset="0.52" stop-color="#155ACB"/>
+      <stop offset="1" stop-color="#0B2B63"/>
+    </linearGradient>
+    <linearGradient id="sea" x1="283" y1="292" x2="706" y2="724" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.56" stop-color="#DDEBFF"/>
+      <stop offset="1" stop-color="#9EC4FF"/>
+    </linearGradient>
+    <linearGradient id="partner" x1="635" y1="590" x2="815" y2="754" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#68F0C8"/>
+      <stop offset="1" stop-color="#FFD66B"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="150%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="26" stdDeviation="34" flood-color="#061B3D" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect x="104" y="104" width="816" height="816" rx="186" fill="url(#bg)" filter="url(#softShadow)"/>
+  <path d="M254 582c0-150 119-284 278-302 126-14 240 53 292 153-58-41-130-60-206-49-138 20-236 138-220 263 10 80 60 145 128 183-154-13-272-115-272-248Z" fill="#071B46" opacity="0.18"/>
+
+  <path fill="url(#sea)" d="M280 570c8-138 120-252 260-270 127-16 238 55 276 165-54-53-129-82-209-72-111 14-193 108-182 210 5 48 29 90 64 120-102-15-190-75-209-153Z"/>
+  <path fill="#FFFFFF" opacity="0.92" d="M335 574c20-92 101-163 198-176 79-10 152 22 196 79-42-17-88-23-136-16-93 13-165 81-177 162-6 41 4 80 25 113-65-27-113-84-106-162Z"/>
+  <path fill="#113C89" d="M598 480c46 0 83 37 83 83s-37 83-83 83-83-37-83-83 37-83 83-83Z"/>
+  <path fill="#EFF6FF" d="M612 520c24 0 43 19 43 43s-19 43-43 43-43-19-43-43 19-43 43-43Z"/>
+  <path fill="#B9D6FF" d="M401 693c86 67 216 65 301-6 47-40 73-94 77-150 23 86-8 182-87 245-112 89-282 80-379-20 30 9 60 15 88 17Z"/>
+
+  <path d="M654 704 748 636" fill="none" stroke="url(#partner)" stroke-width="36" stroke-linecap="round"/>
+  <circle cx="635" cy="718" r="64" fill="#F8FBFF"/>
+  <circle cx="635" cy="718" r="34" fill="#26C8A8"/>
+  <circle cx="770" cy="620" r="64" fill="#F8FBFF"/>
+  <circle cx="770" cy="620" r="34" fill="#FFD166"/>
+  <path d="M725 723c31-6 60-22 82-46" fill="none" stroke="#F8FBFF" stroke-width="24" stroke-linecap="round"/>
+</svg>
