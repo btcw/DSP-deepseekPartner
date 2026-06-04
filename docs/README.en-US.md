@@ -51,7 +51,8 @@ POST /anthropic/chat/completions
 - Start/stop one profile or all profiles.
 - Copy Anthropic/OpenAI proxy URLs and Claude Code environment snippets.
 - Optional DeepSeek API key fallback for plugins that cannot reliably send a key.
-- Dedicated Settings page for MCP service definitions and Skill instructions that are injected as DeepSeek request context.
+- Dedicated Settings page for JSON-based MCP configuration and Skill instructions.
+- Built-in `network_request` MCP tool for OpenAI-compatible non-streaming requests, allowing the gateway to execute HTTP/HTTPS requests and continue to the final model response.
 - Live logs with request ID, status, latency, and upstream error body.
 - Redaction for `Authorization`, `x-api-key`, and token-like values.
 - Runtime-editable name, upstream URL, model mapping, timeout, log level, and feature toggles.
@@ -108,6 +109,25 @@ Model: deepseek-v4-pro[1m]
 ```
 
 Copilot-style plugins here means IDE plugins that support custom third-party AI sources. It does not imply that official GitHub Copilot can be pointed to a third-party source.
+
+## MCP JSON
+
+The Settings page stores MCP configuration as JSON. The default config includes the built-in network request tool:
+
+```json
+{
+  "mcpServers": {
+    "network-request": {
+      "type": "builtin",
+      "enabled": true,
+      "tool": "network_request",
+      "description": "HTTP/HTTPS request helper executed by DSP-deepseekPartner"
+    }
+  }
+}
+```
+
+`network_request` currently targets OpenAI-compatible non-streaming requests first. When the model calls this tool, the gateway performs the HTTP/HTTPS request, sends the tool result back to DeepSeek, and returns the final answer. Streaming requests keep the existing SSE and reasoning compatibility behavior.
 
 ## Claude Code Snippet
 
@@ -182,10 +202,17 @@ npm run tauri:build:binary
 
 - The proxy listens on `127.0.0.1` by default.
 - The app does not require storing DeepSeek API keys by default. If you set a fallback key, it is written to the local app config directory and is used only when a request has no usable key.
+- Built-in `network_request` accesses HTTP/HTTPS URLs when the model calls the tool; enable it only for trusted local client configurations.
 - Logs redact sensitive headers and token-like values.
 - Client setup is copy-only; the app does not automatically modify Android Studio, Claude Code, Cline, Roo, Kilo, or plugin configuration files.
 
 ## Changelog
+
+### 1.2.0
+
+- Switched MCP setup to JSON editing, with the built-in `network-request` service enabled by default.
+- Added executable `network_request` tool support for OpenAI-compatible non-streaming tool-call loops.
+- Legacy `mcpServices` settings are migrated into `mcpConfig.mcpServers` when loaded.
 
 ### 1.1.0
 

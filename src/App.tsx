@@ -16,11 +16,11 @@ import {
 import { api, copyText } from "./api";
 import {
   AppSettings,
+  defaultMcpConfig,
   defaultProfile,
   defaultSettings,
   GatewayProfile,
   LogEntry,
-  McpServiceConfig,
   ProfileStatus,
   ServiceStatusKind,
   SkillConfig
@@ -558,14 +558,8 @@ function SettingsEditor({
   onSave: (settings: AppSettings) => void;
 }) {
   const [draft, setDraft] = useState(settings);
-  const updateMcp = <K extends keyof McpServiceConfig>(index: number, key: K, value: McpServiceConfig[K]) => {
-    setDraft((current) => ({
-      ...current,
-      mcpServices: current.mcpServices.map((item, itemIndex) =>
-        itemIndex === index ? { ...item, [key]: value } : item
-      )
-    }));
-  };
+  const [mcpJson, setMcpJson] = useState(JSON.stringify(settings.mcpConfig ?? defaultMcpConfig(), null, 2));
+  const [mcpJsonError, setMcpJsonError] = useState("");
   const updateSkill = <K extends keyof SkillConfig>(index: number, key: K, value: SkillConfig[K]) => {
     setDraft((current) => ({
       ...current,
@@ -581,7 +575,13 @@ function SettingsEditor({
         className="modal settings-modal"
         onSubmit={(event) => {
           event.preventDefault();
-          onSave(draft);
+          try {
+            const mcpConfig = JSON.parse(mcpJson);
+            setMcpJsonError("");
+            onSave({ ...draft, mcpConfig });
+          } catch (err) {
+            setMcpJsonError(String(err));
+          }
         }}
       >
         <div className="modal-head">
@@ -592,85 +592,27 @@ function SettingsEditor({
         </div>
 
         <fieldset>
-          <legend>MCP services</legend>
-          <div className="settings-list">
-            {draft.mcpServices.length === 0 ? (
-              <p className="muted">No MCP services configured</p>
-            ) : (
-              draft.mcpServices.map((service, index) => (
-                <div className="settings-item" key={service.id || index}>
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      checked={service.enabled}
-                      onChange={(event) => updateMcp(index, "enabled", event.target.checked)}
-                    />
-                    Enabled
-                  </label>
-                  <div className="form-grid">
-                    <label>
-                      Name
-                      <input value={service.name} onChange={(event) => updateMcp(index, "name", event.target.value)} />
-                    </label>
-                    <label>
-                      Command
-                      <input
-                        value={service.command}
-                        placeholder="npx, uvx, node, python"
-                        onChange={(event) => updateMcp(index, "command", event.target.value)}
-                      />
-                    </label>
-                    <label className="span-2">
-                      Args
-                      <input
-                        value={service.args}
-                        placeholder="@modelcontextprotocol/server-filesystem /path"
-                        onChange={(event) => updateMcp(index, "args", event.target.value)}
-                      />
-                    </label>
-                    <label className="span-2">
-                      Env
-                      <textarea
-                        value={service.env}
-                        placeholder="KEY=value, one per line"
-                        onChange={(event) => updateMcp(index, "env", event.target.value)}
-                      />
-                    </label>
-                    <label className="span-2">
-                      Description
-                      <textarea
-                        value={service.description}
-                        onChange={(event) => updateMcp(index, "description", event.target.value)}
-                      />
-                    </label>
-                  </div>
-                  <button
-                    type="button"
-                    className="danger"
-                    onClick={() =>
-                      setDraft((current) => ({
-                        ...current,
-                        mcpServices: current.mcpServices.filter((_, itemIndex) => itemIndex !== index)
-                      }))
-                    }
-                  >
-                    <Trash2 size={16} /> Delete service
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
+          <legend>MCP JSON</legend>
+          <label>
+            Config
+            <textarea
+              className="json-editor"
+              value={mcpJson}
+              spellCheck={false}
+              onChange={(event) => setMcpJson(event.target.value)}
+            />
+          </label>
+          {mcpJsonError && (
+            <div className="notice error" role="alert">
+              {mcpJsonError}
+            </div>
+          )}
           <button
             type="button"
             className="secondary"
-            onClick={() =>
-              setDraft((current) => ({
-                ...current,
-                mcpServices: [...current.mcpServices, newMcpService()]
-              }))
-            }
+            onClick={() => setMcpJson(JSON.stringify(defaultMcpConfig(), null, 2))}
           >
-            <Plus size={16} /> Add MCP service
+            <Plus size={16} /> Network request preset
           </button>
         </fieldset>
 
@@ -809,18 +751,6 @@ function StatusPill({ status }: { status: ServiceStatusKind }) {
 
 function newId(prefix: string) {
   return `${prefix}-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
-}
-
-function newMcpService(): McpServiceConfig {
-  return {
-    id: newId("mcp"),
-    name: "",
-    command: "",
-    args: "",
-    env: "",
-    description: "",
-    enabled: true
-  };
 }
 
 function newSkill(): SkillConfig {

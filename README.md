@@ -51,7 +51,8 @@ POST /anthropic/chat/completions
 - 一键启动/停止单个配置或全部配置。
 - 复制 Anthropic/OpenAI 代理链接和 Claude Code 环境变量片段。
 - 配置可选 DeepSeek API Key fallback，兼容不能稳定传 Key 的插件。
-- 独立 Settings 页，可维护 DeepSeek 请求上下文用的 MCP 服务定义和 Skill 指令。
+- 独立 Settings 页，使用 JSON 维护 MCP 配置和 Skill 指令。
+- 内置 `network_request` MCP 工具，OpenAI-compatible 非流式请求可自动执行 HTTP/HTTPS 网络请求并继续生成最终回复。
 - 查看实时日志，请求 ID、状态码、延迟和上游错误体。
 - 自动脱敏 `Authorization`、`x-api-key` 和 token-like 内容。
 - 启动后可动态修改名称、上游 URL、模型映射、超时、日志等级和特性开关。
@@ -108,6 +109,25 @@ Model: deepseek-v4-pro[1m]
 ```
 
 这里的 Copilot 类插件指支持自定义三方 AI 源的 IDE 插件，不表示官方 GitHub Copilot 可以直接修改三方源。
+
+## MCP JSON 配置
+
+Settings 页里的 MCP 配置使用 JSON。默认会包含内置网络请求工具：
+
+```json
+{
+  "mcpServers": {
+    "network-request": {
+      "type": "builtin",
+      "enabled": true,
+      "tool": "network_request",
+      "description": "HTTP/HTTPS request helper executed by DSP-deepseekPartner"
+    }
+  }
+}
+```
+
+当前 `network_request` 优先支持 OpenAI-compatible 非流式请求。模型触发该工具时，网关会执行 HTTP/HTTPS 请求，把结果作为 tool message 回传给 DeepSeek，然后返回最终回答。流式请求仍保持原有 SSE 转发和 reasoning 兼容逻辑。
 
 ## Claude Code 片段
 
@@ -182,10 +202,17 @@ npm run tauri:build:binary
 
 - 默认只监听 `127.0.0.1`。
 - 默认不需要在应用里保存 DeepSeek API Key；如果填写 fallback Key，会写入本机应用配置目录，仅在请求缺少有效 Key 时使用。
+- 内置 `network_request` 会按模型工具调用访问 HTTP/HTTPS URL，只建议在信任的本地客户端配置中启用。
 - 日志会脱敏敏感 header 和 token-like 内容。
 - 客户端配置仅提供复制片段，不会自动改写 Android Studio、Claude Code、Cline、Roo、Kilo 或其它插件配置文件。
 
 ## 版本记录
+
+### 1.2.0
+
+- MCP 配置改为 JSON 编辑，默认包含内置 `network-request` 服务。
+- 新增可执行的 `network_request` 工具，支持 OpenAI-compatible 非流式工具调用闭环。
+- 旧版 `mcpServices` 配置会在读取时兼容迁移到 `mcpConfig.mcpServers`。
 
 ### 1.1.0
 

@@ -341,6 +341,13 @@ textarea {
   resize: vertical;
 }
 
+.json-editor {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  min-height: 260px;
+  white-space: pre;
+}
+
 input:disabled {
   background: #eef2f0;
   color: #697a72;

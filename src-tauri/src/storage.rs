@@ -120,8 +120,9 @@ impl SettingsStore {
         if raw.trim().is_empty() {
             return Ok(AppSettings::default());
         }
-        serde_json::from_str(&raw)
-            .with_context(|| format!("failed to parse {}", self.path.display()))
+        let settings = serde_json::from_str::<AppSettings>(&raw)
+            .with_context(|| format!("failed to parse {}", self.path.display()))?;
+        Ok(settings.normalized())
     }
 }
 
@@ -155,6 +156,7 @@ mod tests {
         let store = SettingsStore::new(dir.path().into());
         let saved = store
             .save(AppSettings {
+                mcp_config: AppSettings::default().mcp_config,
                 mcp_services: Vec::new(),
                 skills: vec![crate::models::SkillConfig {
                     id: "skill-1".into(),

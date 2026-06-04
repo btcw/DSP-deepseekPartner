@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -176,23 +177,38 @@ impl GatewayProfile {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    #[serde(default = "default_mcp_config")]
+    pub mcp_config: Value,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mcp_services: Vec<McpServiceConfig>,
     #[serde(default)]
     pub skills: Vec<SkillConfig>,
 }
 
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            mcp_config: default_mcp_config(),
+            mcp_services: Vec::new(),
+            skills: Vec::new(),
+        }
+    }
+}
+
 impl AppSettings {
     pub fn normalized(mut self) -> Self {
-        self.mcp_services = self
+        let legacy_services = self
             .mcp_services
             .into_iter()
             .map(McpServiceConfig::normalized)
             .filter(|item| !item.name.is_empty() || !item.command.is_empty())
-            .collect();
+            .collect::<Vec<_>>();
+        self.mcp_config = normalize_mcp_config(self.mcp_config, &legacy_services);
+        self.mcp_services = Vec::new();
         self.skills = self
             .skills
             .into_iter()
@@ -203,13 +219,8 @@ impl AppSettings {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        for service in &self.mcp_services {
-            if service.enabled && service.name.trim().is_empty() {
-                return Err("Enabled MCP services must have a name".into());
-            }
-            if service.enabled && service.command.trim().is_empty() {
-                return Err("Enabled MCP services must have a command".into());
-            }
+        if !self.mcp_config.is_object() {
+            return Err("MCP config must be a JSON object".into());
         }
         for skill in &self.skills {
             if skill.enabled && skill.name.trim().is_empty() {
@@ -222,12 +233,18 @@ impl AppSettings {
         Ok(())
     }
 
+    pub fn network_request_mcp_enabled(&self) -> bool {
+        mcp_server_enabled(&self.mcp_config, "network-request")
+            || mcp_server_enabled(&self.mcp_config, "network_request")
+            || self
+                .mcp_config
+                .pointer("/builtin/networkRequest/enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+    }
+
     pub fn request_context(&self) -> Option<String> {
-        let services = self
-            .mcp_services
-            .iter()
-            .filter(|item| item.enabled)
-            .collect::<Vec<_>>();
+        let services = mcp_server_summaries(&self.mcp_config);
         let skills = self
             .skills
             .iter()
@@ -257,28 +274,113 @@ impl AppSettings {
         if !services.is_empty() {
             lines.push("MCP services:".to_string());
             lines.push(
-                "These are configured MCP service definitions; tool execution still depends on the client/runtime exposing them."
+                "Enabled MCP definitions are available to DSP-deepseekPartner where supported."
                     .to_string(),
             );
-            for service in services {
-                let args = if service.args.is_empty() {
-                    String::new()
-                } else {
-                    format!(" {}", service.args)
-                };
-                let description = if service.description.is_empty() {
-                    String::new()
-                } else {
-                    format!(" - {}", service.description)
-                };
-                lines.push(format!(
-                    "- {}: {}{args}{description}",
-                    service.name, service.command
-                ));
+            for service in &services {
+                lines.push(format!("- {service}"));
             }
         }
         Some(lines.join("\n"))
     }
+}
+
+fn default_mcp_config() -> Value {
+    json!({
+        "mcpServers": {
+            "network-request": {
+                "type": "builtin",
+                "enabled": true,
+                "tool": "network_request",
+                "description": "HTTP/HTTPS request helper executed by DSP-deepseekPartner"
+            }
+        }
+    })
+}
+
+fn normalize_mcp_config(config: Value, legacy_services: &[McpServiceConfig]) -> Value {
+    let mut config = if config.is_null() {
+        default_mcp_config()
+    } else {
+        config
+    };
+    if !config.is_object() {
+        return config;
+    }
+    if !legacy_services.is_empty() {
+        let root = config.as_object_mut().expect("object checked above");
+        let servers = root
+            .entry("mcpServers")
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Some(servers) = servers.as_object_mut() {
+            for service in legacy_services {
+                servers.insert(
+                    service.name.clone(),
+                    json!({
+                        "command": service.command,
+                        "args": split_legacy_args(&service.args),
+                        "env": parse_legacy_env(&service.env),
+                        "description": service.description,
+                        "enabled": service.enabled
+                    }),
+                );
+            }
+        }
+    }
+    config
+}
+
+fn split_legacy_args(args: &str) -> Vec<String> {
+    args.split_whitespace().map(str::to_string).collect()
+}
+
+fn parse_legacy_env(env: &str) -> Map<String, Value> {
+    env.lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| {
+            (
+                key.trim().to_string(),
+                Value::String(value.trim().to_string()),
+            )
+        })
+        .collect()
+}
+
+fn mcp_server_enabled(config: &Value, name: &str) -> bool {
+    config
+        .pointer(&format!("/mcpServers/{name}/enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn mcp_server_summaries(config: &Value) -> Vec<String> {
+    let Some(servers) = config.get("mcpServers").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    servers
+        .iter()
+        .filter(|(_, value)| {
+            value
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+        })
+        .map(|(name, value)| {
+            let description = value
+                .get("description")
+                .and_then(Value::as_str)
+                .filter(|item| !item.trim().is_empty())
+                .map(|item| format!(" - {}", item.trim()))
+                .unwrap_or_default();
+            let command = value
+                .get("command")
+                .and_then(Value::as_str)
+                .filter(|item| !item.trim().is_empty())
+                .or_else(|| value.get("type").and_then(Value::as_str))
+                .unwrap_or("configured");
+            format!("{name}: {command}{description}")
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

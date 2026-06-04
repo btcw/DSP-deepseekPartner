@@ -51,7 +51,8 @@ POST /anthropic/chat/completions
 - 単一プロファイルまたは全プロファイルの start/stop。
 - Anthropic/OpenAI proxy URL と Claude Code 用 env snippet のコピー。
 - Key を安定して送れないプラグイン向けの任意 DeepSeek API Key fallback。
-- DeepSeek request context に注入する MCP service definition と Skill instruction を管理する独立 Settings ページ。
+- JSON ベースの MCP configuration と Skill instruction を管理する独立 Settings ページ。
+- OpenAI-compatible の non-streaming request 向けに、HTTP/HTTPS request を実行して最終応答まで継続する内蔵 `network_request` MCP tool。
 - request ID、status、latency、upstream error body を含む live log。
 - `Authorization`、`x-api-key`、token-like value のログマスク。
 - 起動中でも name、upstream URL、model mapping、timeout、log level、feature toggle を編集可能。
@@ -108,6 +109,25 @@ Model: deepseek-v4-pro[1m]
 ```
 
 ここでの Copilot 系プラグインとは、サードパーティ AI source をカスタムできる IDE プラグインを指します。公式 GitHub Copilot がサードパーティソースを直接指定できるという意味ではありません。
+
+## MCP JSON
+
+Settings ページの MCP configuration は JSON で保存します。デフォルトでは内蔵 network request tool が含まれます。
+
+```json
+{
+  "mcpServers": {
+    "network-request": {
+      "type": "builtin",
+      "enabled": true,
+      "tool": "network_request",
+      "description": "HTTP/HTTPS request helper executed by DSP-deepseekPartner"
+    }
+  }
+}
+```
+
+現在の `network_request` は、まず OpenAI-compatible の non-streaming request を対象にしています。モデルがこの tool を呼び出すと、gateway が HTTP/HTTPS request を実行し、tool result を DeepSeek に返してから最終応答を返します。streaming request は既存の SSE と reasoning compatibility behavior を維持します。
 
 ## Claude Code Snippet
 
@@ -182,10 +202,17 @@ npm run tauri:build:binary
 
 - proxy はデフォルトで `127.0.0.1` のみに bind します。
 - デフォルトでは DeepSeek API key をアプリに保存する必要はありません。fallback Key を設定した場合はローカルのアプリ設定ディレクトリに保存され、有効な Key がないリクエストでのみ使用されます。
+- 内蔵 `network_request` は model が tool を呼び出したときに HTTP/HTTPS URL へアクセスします。信頼できるローカルクライアント設定でのみ有効化してください。
 - log では sensitive header と token-like value をマスクします。
 - client setup は copy-only です。Android Studio、Claude Code、Cline、Roo、Kilo、各種 plugin の設定ファイルは自動変更しません。
 
 ## Changelog
+
+### 1.2.0
+
+- MCP setup を JSON editing に変更し、内蔵 `network-request` service をデフォルトで有効化。
+- OpenAI-compatible non-streaming tool-call loop 向けに、実行可能な `network_request` tool support を追加。
+- 旧 `mcpServices` settings は読み込み時に `mcpConfig.mcpServers` へ移行されます。
 
 ### 1.1.0
 

@@ -314,6 +314,7 @@ async fn proxy_request(
     .await;
     let settings = state.settings.load().await.unwrap_or_default();
     inject_settings_context(surface.clone(), &settings, &mut value);
+    inject_builtin_mcp_tools(surface.clone(), &settings, &mut value);
     let target = target_url(&profile.upstream_base_url, upstream_path);
     state
         .logs
@@ -326,31 +327,22 @@ async fn proxy_request(
         .await?;
 
     let timeout = Duration::from_secs(profile.timeout_seconds);
-    let mut request = state
+    let request = state
         .client
-        .request(method.clone(), target)
+        .request(method.clone(), target.clone())
         .timeout(timeout)
         .json(&value);
-
-    let has_request_api_key = headers_have_api_key(&headers);
-    for (name, value) in headers.iter() {
-        if should_forward_header(name) && !is_empty_api_key_header(name, value) {
-            request = request.header(name, value);
-        }
-    }
-    if !has_request_api_key {
-        if let Some(api_key) = profile.fallback_api_key() {
-            request = request.header(header::AUTHORIZATION, format!("Bearer {api_key}"));
-            state
-                .logs
-                .append(
-                    &profile.id,
-                    "info",
-                    Some(&request_id),
-                    "Injected configured fallback API key because request did not include one",
-                )
-                .await?;
-        }
+    let (request, injected_fallback_key) = apply_forwarded_headers(request, &headers, &profile);
+    if injected_fallback_key {
+        state
+            .logs
+            .append(
+                &profile.id,
+                "info",
+                Some(&request_id),
+                "Injected configured fallback API key because request did not include one",
+            )
+            .await?;
     }
 
     let upstream = request.send().await?;
@@ -450,11 +442,37 @@ async fn proxy_request(
             .await?;
         Ok(response)
     } else {
-        let bytes = upstream.bytes().await?;
+        let mut response_status = status;
+        let mut response_headers = response_headers;
+        let mut bytes = upstream.bytes().await?;
         if let Ok(json) = serde_json::from_slice::<Value>(&bytes) {
             cache_reasoning_json(&state.reasoning_cache, &json).await;
+            if response_status.is_success()
+                && surface == ApiSurface::OpenAi
+                && settings.network_request_mcp_enabled()
+            {
+                if let Some(tool_result) = run_openai_builtin_mcp_tools(
+                    &state,
+                    &profile,
+                    &headers,
+                    &request_id,
+                    &target,
+                    timeout,
+                    value.clone(),
+                    json,
+                )
+                .await?
+                {
+                    response_status = tool_result.status;
+                    response_headers = tool_result.headers;
+                    bytes = tool_result.body;
+                    if let Ok(json) = serde_json::from_slice::<Value>(&bytes) {
+                        cache_reasoning_json(&state.reasoning_cache, &json).await;
+                    }
+                }
+            }
         }
-        if !status.is_success() {
+        if !response_status.is_success() {
             let body_excerpt = String::from_utf8_lossy(&bytes)
                 .chars()
                 .take(1200)
@@ -474,7 +492,7 @@ async fn proxy_request(
         }
         let mut response = Response::new(Body::from(bytes));
         *response.status_mut() =
-            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            StatusCode::from_u16(response_status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
         copy_response_headers(response.headers_mut(), &response_headers);
         state
             .logs
@@ -482,7 +500,7 @@ async fn proxy_request(
                 &profile.id,
                 "info",
                 Some(&request_id),
-                format!("{method} {} <- upstream {status}", uri.path()),
+                format!("{method} {} <- upstream {response_status}", uri.path()),
             )
             .await?;
         Ok(response)
@@ -671,6 +689,65 @@ fn inject_openai_system_context(value: &mut Value, context: String) {
     messages.insert(0, json!({ "role": "system", "content": context }));
 }
 
+fn inject_builtin_mcp_tools(surface: ApiSurface, settings: &AppSettings, value: &mut Value) {
+    if surface != ApiSurface::OpenAi || !settings.network_request_mcp_enabled() {
+        return;
+    }
+    let tool = network_request_tool_schema();
+    match value.get_mut("tools").and_then(Value::as_array_mut) {
+        Some(tools) => {
+            let exists = tools.iter().any(|item| {
+                item.pointer("/function/name").and_then(Value::as_str) == Some("network_request")
+            });
+            if !exists {
+                tools.push(tool);
+            }
+        }
+        None => {
+            value["tools"] = Value::Array(vec![tool]);
+        }
+    }
+}
+
+fn network_request_tool_schema() -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": "network_request",
+            "description": "Make an HTTP or HTTPS request and return response status, headers, and body text.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Absolute HTTP or HTTPS URL."
+                    },
+                    "method": {
+                        "type": "string",
+                        "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"],
+                        "description": "HTTP method. Defaults to GET."
+                    },
+                    "headers": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" }
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Optional request body. JSON should be passed as a string."
+                    },
+                    "timeoutSeconds": {
+                        "type": "number",
+                        "minimum": 1,
+                        "maximum": 30
+                    }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 async fn normalize_anthropic(
     profile: &GatewayProfile,
     value: &mut Value,
@@ -785,6 +862,232 @@ fn map_openai_model(profile: &GatewayProfile, value: &mut Value) {
     value["model"] = Value::String(mapped);
 }
 
+struct BuiltinMcpToolResult {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: Bytes,
+}
+
+#[derive(Debug)]
+struct OpenAiToolCall {
+    id: String,
+    arguments: Value,
+}
+
+async fn run_openai_builtin_mcp_tools(
+    state: &GatewayState,
+    profile: &GatewayProfile,
+    original_headers: &HeaderMap,
+    request_id: &str,
+    target: &str,
+    timeout: Duration,
+    mut request_body: Value,
+    mut current_json: Value,
+) -> anyhow::Result<Option<BuiltinMcpToolResult>> {
+    let mut executed_any = false;
+    for _ in 0..3 {
+        let tool_calls = openai_network_request_tool_calls(&current_json);
+        if tool_calls.is_empty() {
+            if executed_any {
+                return Ok(Some(BuiltinMcpToolResult {
+                    status: StatusCode::OK,
+                    headers: json_content_headers(),
+                    body: Bytes::from(current_json.to_string()),
+                }));
+            }
+            return Ok(None);
+        }
+        executed_any = true;
+
+        let Some(messages) = request_body
+            .get_mut("messages")
+            .and_then(Value::as_array_mut)
+        else {
+            return Err(anyhow!("OpenAI MCP tool loop requires a messages array"));
+        };
+        if let Some(message) = current_json.pointer("/choices/0/message").cloned() {
+            messages.push(message);
+        }
+        for call in tool_calls {
+            let result = execute_network_request_tool(&state.client, &call.arguments).await;
+            let content = serde_json::to_string(&result)?;
+            state
+                .logs
+                .append(
+                    &profile.id,
+                    "info",
+                    Some(request_id),
+                    format!("Executed builtin MCP tool network_request for {}", call.id),
+                )
+                .await?;
+            messages.push(json!({
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": content
+            }));
+        }
+
+        let request = state
+            .client
+            .post(target)
+            .timeout(timeout)
+            .json(&request_body);
+        let (request, _) = apply_forwarded_headers(request, original_headers, profile);
+        let upstream = request.send().await?;
+        let status = upstream.status();
+        let headers = upstream.headers().clone();
+        let body = upstream.bytes().await?;
+        if !status.is_success() {
+            return Ok(Some(BuiltinMcpToolResult {
+                status,
+                headers,
+                body,
+            }));
+        }
+        current_json = serde_json::from_slice::<Value>(&body)
+            .context("MCP tool follow-up response must be JSON")?;
+    }
+
+    Ok(Some(BuiltinMcpToolResult {
+        status: StatusCode::BAD_GATEWAY,
+        headers: json_content_headers(),
+        body: Bytes::from(
+            json!({
+                "error": {
+                    "message": "MCP tool loop limit reached",
+                    "type": "deepseek_gateway_error"
+                }
+            })
+            .to_string(),
+        ),
+    }))
+}
+
+fn openai_network_request_tool_calls(value: &Value) -> Vec<OpenAiToolCall> {
+    value
+        .pointer("/choices/0/message/tool_calls")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|call| {
+            call.pointer("/function/name").and_then(Value::as_str) == Some("network_request")
+        })
+        .filter_map(|call| {
+            let id = call.get("id").and_then(Value::as_str)?.to_string();
+            let raw_arguments = call.pointer("/function/arguments")?;
+            let arguments = match raw_arguments {
+                Value::String(text) => serde_json::from_str::<Value>(text).unwrap_or_else(|_| {
+                    json!({
+                        "url": text
+                    })
+                }),
+                other => other.clone(),
+            };
+            Some(OpenAiToolCall { id, arguments })
+        })
+        .collect()
+}
+
+async fn execute_network_request_tool(client: &Client, arguments: &Value) -> Value {
+    match execute_network_request_tool_inner(client, arguments).await {
+        Ok(value) => value,
+        Err(error) => json!({
+            "ok": false,
+            "error": error.to_string()
+        }),
+    }
+}
+
+async fn execute_network_request_tool_inner(
+    client: &Client,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    let url = arguments
+        .get("url")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("network_request.url is required"))?;
+    let parsed = reqwest::Url::parse(url).context("network_request.url must be absolute")?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(anyhow!("network_request only supports http and https URLs"));
+    }
+
+    let method = arguments
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or("GET")
+        .to_ascii_uppercase();
+    let method = reqwest::Method::from_bytes(method.as_bytes())
+        .context("network_request.method is invalid")?;
+    if !matches!(
+        method,
+        reqwest::Method::GET
+            | reqwest::Method::POST
+            | reqwest::Method::PUT
+            | reqwest::Method::PATCH
+            | reqwest::Method::DELETE
+            | reqwest::Method::HEAD
+    ) {
+        return Err(anyhow!("network_request.method is not allowed"));
+    }
+
+    let timeout = arguments
+        .get("timeoutSeconds")
+        .and_then(Value::as_u64)
+        .unwrap_or(15)
+        .clamp(1, 30);
+    let mut request = client
+        .request(method, parsed)
+        .timeout(Duration::from_secs(timeout));
+    if let Some(headers) = arguments.get("headers").and_then(Value::as_object) {
+        for (name, value) in headers {
+            if let Some(value) = value.as_str() {
+                let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
+                    continue;
+                };
+                if should_forward_header(&name) {
+                    request = request.header(name, value);
+                }
+            }
+        }
+    }
+    if let Some(body) = arguments.get("body") {
+        if let Some(text) = body.as_str() {
+            request = request.body(text.to_string());
+        } else if !body.is_null() {
+            request = request.json(body);
+        }
+    }
+
+    let response = request.send().await?;
+    let status = response.status();
+    let final_url = response.url().to_string();
+    let headers = response
+        .headers()
+        .iter()
+        .filter(|(name, _)| !matches!(name.as_str(), "set-cookie" | "authorization" | "x-api-key"))
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), Value::String(value.to_string())))
+        })
+        .collect::<serde_json::Map<String, Value>>();
+    let bytes = response.bytes().await?;
+    let body = String::from_utf8_lossy(&bytes);
+    let max_chars = 65_536usize;
+    let body_excerpt = body.chars().take(max_chars).collect::<String>();
+    let truncated = body.chars().count() > max_chars;
+
+    Ok(json!({
+        "ok": status.is_success(),
+        "status": status.as_u16(),
+        "url": final_url,
+        "headers": headers,
+        "body": body_excerpt,
+        "truncated": truncated
+    }))
+}
+
 async fn replay_anthropic_reasoning(
     value: &mut Value,
     cache: &Arc<Mutex<HashMap<String, String>>>,
@@ -862,6 +1165,26 @@ fn should_forward_header(name: &HeaderName) -> bool {
     )
 }
 
+fn apply_forwarded_headers(
+    mut request: reqwest::RequestBuilder,
+    headers: &HeaderMap,
+    profile: &GatewayProfile,
+) -> (reqwest::RequestBuilder, bool) {
+    let has_request_api_key = headers_have_api_key(headers);
+    for (name, value) in headers.iter() {
+        if should_forward_header(name) && !is_empty_api_key_header(name, value) {
+            request = request.header(name, value);
+        }
+    }
+    if !has_request_api_key {
+        if let Some(api_key) = profile.fallback_api_key() {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {api_key}"));
+            return (request, true);
+        }
+    }
+    (request, false)
+}
+
 fn headers_have_api_key(headers: &HeaderMap) -> bool {
     headers
         .get_all(header::AUTHORIZATION)
@@ -914,6 +1237,15 @@ fn looks_like_placeholder_api_key(value: &str) -> bool {
             | "null"
             | "undefined"
     ) || (normalized.contains("your") && normalized.contains("key"))
+}
+
+fn json_content_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers
 }
 
 fn copy_response_headers(target: &mut HeaderMap, source: &HeaderMap) {
@@ -1342,15 +1674,26 @@ async fn cache_reasoning_json(cache: &Arc<Mutex<HashMap<String, String>>>, value
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{AppSettings, GatewayProfile, McpServiceConfig, SkillConfig};
+    use crate::models::{AppSettings, GatewayProfile, SkillConfig};
     use crate::storage::SettingsStore;
     use wiremock::{
-        matchers::{body_json, header as header_match, method, path},
+        matchers::{body_json, body_string_contains, header as header_match, method, path},
         Mock, MockServer, ResponseTemplate,
     };
 
     fn settings_store() -> SettingsStore {
-        SettingsStore::new(tempfile::tempdir().unwrap().path().into())
+        let dir = std::env::temp_dir().join(format!("dsp-settings-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("settings.json"),
+            r#"{"mcpConfig":{"mcpServers":{}},"skills":[]}"#,
+        )
+        .unwrap();
+        SettingsStore::new(dir)
+    }
+
+    fn network_settings_store() -> SettingsStore {
+        SettingsStore::new(tempfile::tempdir().unwrap().keep())
     }
 
     #[tokio::test]
@@ -1539,15 +1882,17 @@ mod tests {
     #[test]
     fn injects_settings_context_for_anthropic_and_openai() {
         let settings = AppSettings {
-            mcp_services: vec![McpServiceConfig {
-                id: "mcp-1".into(),
-                name: "Filesystem".into(),
-                command: "npx".into(),
-                args: "@modelcontextprotocol/server-filesystem".into(),
-                env: String::new(),
-                description: "local files".into(),
-                enabled: true,
-            }],
+            mcp_config: json!({
+                "mcpServers": {
+                    "Filesystem": {
+                        "command": "npx",
+                        "args": ["@modelcontextprotocol/server-filesystem"],
+                        "description": "local files",
+                        "enabled": true
+                    }
+                }
+            }),
+            mcp_services: Vec::new(),
             skills: vec![SkillConfig {
                 id: "skill-1".into(),
                 name: "Android Studio".into(),
@@ -1574,6 +1919,23 @@ mod tests {
             .pointer("/messages/0/content")
             .and_then(Value::as_str)
             .is_some_and(|text| text.contains("Android Studio") && text.contains("MCP")));
+    }
+
+    #[test]
+    fn injects_network_request_tool_schema_for_openai() {
+        let settings = AppSettings::default();
+        let mut openai = json!({
+            "model": "deepseek-chat",
+            "messages": [{ "role": "user", "content": "fetch a page" }]
+        });
+        inject_builtin_mcp_tools(ApiSurface::OpenAi, &settings, &mut openai);
+
+        assert_eq!(
+            openai
+                .pointer("/tools/0/function/name")
+                .and_then(Value::as_str),
+            Some("network_request")
+        );
     }
 
     #[test]
@@ -1889,6 +2251,88 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(preserved.status(), reqwest::StatusCode::OK);
+        registry.stop().await;
+    }
+
+    #[tokio::test]
+    async fn executes_builtin_network_request_tool_for_openai_non_streaming() {
+        let upstream = MockServer::start().await;
+        let network_url = format!("{}/resource", upstream.uri());
+        Mock::given(method("GET"))
+            .and(path("/resource"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/plain")
+                    .set_body_string("network ok"),
+            )
+            .mount(&upstream)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("fetch network"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "reasoning_content": "need network",
+                        "tool_calls": [{
+                            "id": "call_network",
+                            "type": "function",
+                            "function": {
+                                "name": "network_request",
+                                "arguments": serde_json::to_string(&json!({
+                                    "url": network_url,
+                                    "method": "GET"
+                                })).unwrap()
+                            }
+                        }]
+                    }
+                }]
+            })))
+            .expect(1)
+            .with_priority(5)
+            .mount(&upstream)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("network ok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "final after network"
+                    }
+                }]
+            })))
+            .expect(1)
+            .with_priority(1)
+            .mount(&upstream)
+            .await;
+
+        let port = portpicker::pick_unused_port().unwrap();
+        let mut profile = GatewayProfile::new_default("network".into(), "Network".into(), port);
+        profile.upstream_base_url = upstream.uri();
+        let logs = LogStore::new(tempfile::tempdir().unwrap().path().into());
+        let registry = GatewayRegistry::start(profile, logs, network_settings_store())
+            .await
+            .unwrap();
+
+        let response = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{port}/chat/completions"))
+            .json(&json!({
+                "model": "deepseek-chat",
+                "messages": [{ "role": "user", "content": "fetch network" }]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert!(response
+            .text()
+            .await
+            .unwrap()
+            .contains("final after network"));
         registry.stop().await;
     }
 

@@ -51,16 +51,6 @@ export interface LogEntry {
   message: string;
 }
 
-export interface McpServiceConfig {
-  id: string;
-  name: string;
-  command: string;
-  args: string;
-  env: string;
-  description: string;
-  enabled: boolean;
-}
-
 export interface SkillConfig {
   id: string;
   name: string;
@@ -70,7 +60,7 @@ export interface SkillConfig {
 }
 
 export interface AppSettings {
-  mcpServices: McpServiceConfig[];
+  mcpConfig: unknown;
   skills: SkillConfig[];
 }
 
@@ -102,6 +92,17 @@ export const defaultProfile = (port = 17777): GatewayProfile => ({
 });
 
 export const defaultSettings = (): AppSettings => ({
-  mcpServices: [],
+  mcpConfig: defaultMcpConfig(),
   skills: []
+});
+
+export const defaultMcpConfig = () => ({
+  mcpServers: {
+    "network-request": {
+      type: "builtin",
+      enabled: true,
+      tool: "network_request",
+      description: "HTTP/HTTPS request helper executed by DSP-deepseekPartner"
+    }
+  }
 });

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -142,24 +142,37 @@ describe("App", () => {
     expect(within(panel).getByText(/api.deepseek.com/)).toBeInTheDocument();
   });
 
-  it("saves MCP and skill settings", async () => {
+  it("saves MCP JSON and skill settings", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await screen.findByText("DeepSeek Local");
     await user.click(screen.getByRole("button", { name: /^settings$/i }));
-    await user.click(screen.getByRole("button", { name: /add mcp service/i }));
-    await user.type(screen.getAllByLabelText("Name")[0], "Filesystem");
-    await user.type(screen.getByLabelText("Command"), "npx");
+    fireEvent.change(screen.getByLabelText("Config"), {
+      target: {
+        value: JSON.stringify({
+          mcpServers: {
+            "network-request": {
+              type: "builtin",
+              enabled: true,
+              tool: "network_request"
+            }
+          }
+        })
+      }
+    });
     await user.click(screen.getByRole("button", { name: /add skill/i }));
-    await user.type(screen.getAllByLabelText("Name")[1], "Android Studio");
+    await user.type(screen.getByLabelText("Name"), "Android Studio");
     await user.type(screen.getByLabelText("Instructions"), "Prefer Android Studio APIs.");
     await user.click(screen.getByRole("button", { name: /save settings/i }));
 
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
-    expect(vi.mocked(api.saveSettings).mock.calls[0][0].mcpServices[0]).toMatchObject({
-      name: "Filesystem",
-      command: "npx"
+    expect(vi.mocked(api.saveSettings).mock.calls[0][0].mcpConfig).toMatchObject({
+      mcpServers: {
+        "network-request": {
+          enabled: true
+        }
+      }
     });
     expect(vi.mocked(api.saveSettings).mock.calls[0][0].skills[0]).toMatchObject({
       name: "Android Studio"
