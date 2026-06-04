@@ -2,7 +2,7 @@
 
 言語: [简体中文](../README.md) | [English](README.en-US.md) | **日本語**
 
-DSP-deepseekPartner は、Android Studio AI、Copilot 系のサードパーティプラグイン、Claude Code、Cline、Roo、Kilo など、カスタム AI ソースに対応したツールを DeepSeek に接続するための、独立した macOS / Windows デスクトップアプリです。
+DSP-deepseekPartner は、**Android Studio AI で DeepSeek を使えるようにすること**を重視した、独立した macOS / Windows デスクトップアプリです。Claude Code、Cline、Roo、Kilo など、custom OpenAI / Anthropic API source に対応したツール向けのローカル DeepSeek proxy としても利用できます。
 
 これは DeepSeek 公式アプリではありません。デフォルトでは API Key はクライアント側のリクエストで送信されます。プロファイルに fallback API Key を明示的に設定した場合のみ、アプリはそれをローカルに保存し、元のリクエストに有効な Key がないときだけ注入します。
 
@@ -39,10 +39,10 @@ POST /anthropic/chat/completions
 
 ## クライアント例
 
-- Android Studio AI: Anthropic-compatible custom source としてローカルプロキシを指定します。
-- Copilot 系サードパーティプラグイン: custom OpenAI / Anthropic Base URL に対応したプラグインから利用できます。
+- Android Studio AI: Anthropic-compatible custom source としてローカルプロキシを指定する構成を検証済みです。Android Studio から DeepSeek を利用できます。
 - Claude Code: `thinking.type=adaptive`、effort mapping、reasoning replay、streamed thinking の互換処理を行います。
 - Cline / Roo / Kilo / その他 Agent クライアント: custom OpenAI/Anthropic API endpoint に対応していれば利用できます。
+- Copilot plugin: 現時点では安定して利用できる構成を確認できていないため、サポート対象としては推奨していません。
 
 ## 機能
 
@@ -73,7 +73,7 @@ POST /anthropic/chat/completions
 
 ## Android Studio AI
 
-Android Studio AI が Anthropic-compatible custom source に対応している場合:
+これは DSP-deepseekPartner で現在重点的に検証している利用シーンです。以下のように設定すると、Android Studio AI からローカル proxy 経由で DeepSeek を利用できます。
 
 ```text
 Schema: Anthropic-compatible
@@ -90,25 +90,9 @@ http://127.0.0.1:17777/anthropic/v1/models
 
 ## Copilot 系プラグイン
 
-OpenAI-compatible custom source に対応したプラグイン:
+Copilot plugin は、現時点では DSP-deepseekPartner の推奨対象ではありません。OpenAI-compatible / Anthropic-compatible の third-party source 設定では、ローカル検証で安定して動作する構成を確認できていません。
 
-```text
-Schema: OpenAI-compatible
-Base URL: http://127.0.0.1:17777/v1
-API Key: your DeepSeek API key
-Model: deepseek-v4-pro[1m]
-```
-
-Anthropic-compatible custom source に対応したプラグイン:
-
-```text
-Schema: Anthropic-compatible
-Base URL: http://127.0.0.1:17777/anthropic
-API Key: your DeepSeek API key
-Model: deepseek-v4-pro[1m]
-```
-
-ここでの Copilot 系プラグインとは、サードパーティ AI source をカスタムできる IDE プラグインを指します。公式 GitHub Copilot がサードパーティソースを直接指定できるという意味ではありません。
+ここでの Copilot plugin とは IDE の Copilot 関連 plugin / extension を指します。公式 GitHub Copilot が DeepSeek に直接切り替えられるという意味ではありません。この利用シーンが検証できた時点で、明確な設定手順を追加します。
 
 ## MCP JSON
 

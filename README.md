@@ -2,7 +2,7 @@
 
 语言切换：**简体中文** | [English](docs/README.en-US.md) | [日本語](docs/README.ja-JP.md)
 
-DSP-deepseekPartner 是一个独立的 macOS / Windows 桌面应用，用来为 Android Studio AI、Copilot 类第三方插件、Claude Code、Cline、Roo、Kilo 等支持自定义 AI 源的工具提供本地 DeepSeek 代理。
+DSP-deepseekPartner 是一个独立的 macOS / Windows 桌面应用，重点让 **Android Studio AI 支持 DeepSeek**，同时也为 Claude Code、Cline、Roo、Kilo 等支持自定义 OpenAI / Anthropic API 源的工具提供本地 DeepSeek 代理。
 
 它不是 DeepSeek 官方应用。默认仍由客户端请求携带 API Key；如果你主动在配置里填写 fallback API Key，应用只会在原请求没有有效 Key 时注入，并保存到本机配置中。
 
@@ -39,10 +39,10 @@ POST /anthropic/chat/completions
 
 ## 支持的客户端场景
 
-- Android Studio AI：使用 Anthropic-compatible schema 指向本地代理。
-- Copilot 类第三方插件：支持自定义 OpenAI 或 Anthropic Base URL 的插件可以接入。
+- Android Studio AI：已验证可通过 Anthropic-compatible schema 指向本地代理，让 Android Studio 使用 DeepSeek。
 - Claude Code：处理 `thinking.type=adaptive`、effort 映射、reasoning replay 等 DeepSeek 兼容问题。
 - Cline / Roo / Kilo / 其它 Agent 客户端：只要支持自定义 OpenAI/Anthropic API 地址即可接入。
+- Copilot 插件：当前实测还不能稳定使用，文档暂不作为支持场景推荐。
 
 ## 主要功能
 
@@ -73,7 +73,7 @@ POST /anthropic/chat/completions
 
 ## Android Studio AI 配置
 
-如果 Android Studio AI 支持 Anthropic-compatible custom source，可以这样配置：
+这是 DSP-deepseekPartner 当前重点支持并验证过的场景。按下面方式配置后，Android Studio AI 可以通过本地代理使用 DeepSeek：
 
 ```text
 Schema: Anthropic-compatible
@@ -90,25 +90,9 @@ http://127.0.0.1:17777/anthropic/v1/models
 
 ## Copilot 类插件配置
 
-如果插件支持 OpenAI-compatible custom source：
+Copilot 插件目前实测还不能稳定接入 DSP-deepseekPartner，暂不建议按 OpenAI-compatible 或 Anthropic-compatible 三方源方式配置。
 
-```text
-Schema: OpenAI-compatible
-Base URL: http://127.0.0.1:17777/v1
-API Key: your DeepSeek API key
-Model: deepseek-v4-pro[1m]
-```
-
-如果插件支持 Anthropic-compatible custom source：
-
-```text
-Schema: Anthropic-compatible
-Base URL: http://127.0.0.1:17777/anthropic
-API Key: your DeepSeek API key
-Model: deepseek-v4-pro[1m]
-```
-
-这里的 Copilot 类插件指支持自定义三方 AI 源的 IDE 插件，不表示官方 GitHub Copilot 可以直接修改三方源。
+这里的 Copilot 插件指 IDE 里的 Copilot 相关插件或扩展，不表示官方 GitHub Copilot 支持直接切换到 DeepSeek。等该场景跑通后再补充明确配置。
 
 ## MCP JSON 配置
 

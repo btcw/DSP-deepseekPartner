@@ -2,7 +2,7 @@
 
 Language: [简体中文](../README.md) | **English** | [日本語](README.ja-JP.md)
 
-DSP-deepseekPartner is an independent macOS and Windows desktop app that provides local DeepSeek proxy profiles for Android Studio AI, Copilot-style third-party plugins, Claude Code, Cline, Roo, Kilo, and other tools that support custom AI sources.
+DSP-deepseekPartner is an independent macOS and Windows desktop app focused on making **Android Studio AI work with DeepSeek**, while also providing local DeepSeek proxy profiles for Claude Code, Cline, Roo, Kilo, and other tools that support custom OpenAI / Anthropic API sources.
 
 It is not an official DeepSeek application. By default, API keys are supplied by your client requests. If you explicitly set a fallback API key in a profile, the app stores it locally and injects it only when the original request has no usable key.
 
@@ -39,10 +39,10 @@ POST /anthropic/chat/completions
 
 ## Client Scenarios
 
-- Android Studio AI: use an Anthropic-compatible custom source pointed at the local proxy.
-- Copilot-style third-party plugins: plugins with custom OpenAI or Anthropic Base URL support can connect through the proxy.
+- Android Studio AI: verified with an Anthropic-compatible custom source pointed at the local proxy, so Android Studio can use DeepSeek.
 - Claude Code: compatibility for `thinking.type=adaptive`, effort mapping, reasoning replay, and streamed thinking.
 - Cline / Roo / Kilo / other agent clients: any client that supports custom OpenAI/Anthropic API endpoints can connect.
+- Copilot plugins: currently not recommended as a supported scenario because local testing has not produced a stable working setup.
 
 ## Features
 
@@ -73,7 +73,7 @@ POST /anthropic/chat/completions
 
 ## Android Studio AI
 
-If Android Studio AI supports an Anthropic-compatible custom source:
+This is the main verified DSP-deepseekPartner scenario. Configure Android Studio AI like this to use DeepSeek through the local proxy:
 
 ```text
 Schema: Anthropic-compatible
@@ -90,25 +90,9 @@ http://127.0.0.1:17777/anthropic/v1/models
 
 ## Copilot-Style Plugins
 
-For plugins that support an OpenAI-compatible custom source:
+Copilot plugins are not currently a recommended DSP-deepseekPartner target. Local testing has not produced a stable working setup through either OpenAI-compatible or Anthropic-compatible third-party source configuration.
 
-```text
-Schema: OpenAI-compatible
-Base URL: http://127.0.0.1:17777/v1
-API Key: your DeepSeek API key
-Model: deepseek-v4-pro[1m]
-```
-
-For plugins that support an Anthropic-compatible custom source:
-
-```text
-Schema: Anthropic-compatible
-Base URL: http://127.0.0.1:17777/anthropic
-API Key: your DeepSeek API key
-Model: deepseek-v4-pro[1m]
-```
-
-Copilot-style plugins here means IDE plugins that support custom third-party AI sources. It does not imply that official GitHub Copilot can be pointed to a third-party source.
+This refers to Copilot-related IDE plugins or extensions. It does not imply that official GitHub Copilot can be pointed directly to DeepSeek. Clear setup instructions will be added only after this scenario is verified.
 
 ## MCP JSON
 
