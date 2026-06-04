@@ -31,7 +31,11 @@ use uuid::Uuid;
 
 use crate::{
     logs::LogStore,
-    models::{canonical_model_id, ApiSurface, GatewayProfile, ProfileStatus, ServiceStatusKind},
+    models::{
+        canonical_model_id, ApiSurface, AppSettings, GatewayProfile, ProfileStatus,
+        ServiceStatusKind,
+    },
+    storage::SettingsStore,
 };
 
 const LATEST_TOOL_REASONING_KEY: &str = "__deepseek_gateway_latest_tool_reasoning__";
@@ -71,6 +75,7 @@ impl RuntimeStatus {
 #[derive(Clone)]
 struct GatewayState {
     profile: Arc<RwLock<GatewayProfile>>,
+    settings: SettingsStore,
     client: Client,
     logs: LogStore,
     status: Arc<RwLock<RuntimeStatus>>,
@@ -79,7 +84,11 @@ struct GatewayState {
 }
 
 impl GatewayRegistry {
-    pub async fn start(profile: GatewayProfile, logs: LogStore) -> anyhow::Result<Self> {
+    pub async fn start(
+        profile: GatewayProfile,
+        logs: LogStore,
+        settings: SettingsStore,
+    ) -> anyhow::Result<Self> {
         profile.validate().map_err(anyhow::Error::msg)?;
         let addr = SocketAddr::from(([127, 0, 0, 1], profile.port));
         let listener = TcpListener::bind(addr)
@@ -101,6 +110,7 @@ impl GatewayRegistry {
         let reasoning_cache = Arc::new(Mutex::new(HashMap::new()));
         let state = GatewayState {
             profile: profile_arc.clone(),
+            settings,
             client,
             logs: logs.clone(),
             status: status.clone(),
@@ -302,6 +312,8 @@ async fn proxy_request(
         &state.reasoning_cache,
     )
     .await;
+    let settings = state.settings.load().await.unwrap_or_default();
+    inject_settings_context(surface.clone(), &settings, &mut value);
     let target = target_url(&profile.upstream_base_url, upstream_path);
     state
         .logs
@@ -320,9 +332,24 @@ async fn proxy_request(
         .timeout(timeout)
         .json(&value);
 
+    let has_request_api_key = headers_have_api_key(&headers);
     for (name, value) in headers.iter() {
-        if should_forward_header(name) {
+        if should_forward_header(name) && !is_empty_api_key_header(name, value) {
             request = request.header(name, value);
+        }
+    }
+    if !has_request_api_key {
+        if let Some(api_key) = profile.fallback_api_key() {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {api_key}"));
+            state
+                .logs
+                .append(
+                    &profile.id,
+                    "info",
+                    Some(&request_id),
+                    "Injected configured fallback API key because request did not include one",
+                )
+                .await?;
         }
     }
 
@@ -338,8 +365,8 @@ async fn proxy_request(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let is_sse_response = content_type.contains("text/event-stream")
-        || (status.is_success() && requested_stream);
+    let is_sse_response =
+        content_type.contains("text/event-stream") || (status.is_success() && requested_stream);
 
     if is_sse_response {
         let smooth_streaming_text = surface == ApiSurface::OpenAi;
@@ -597,6 +624,53 @@ async fn normalize_request_body(
     }
 }
 
+fn inject_settings_context(surface: ApiSurface, settings: &AppSettings, value: &mut Value) {
+    let Some(context) = settings.request_context() else {
+        return;
+    };
+    match surface {
+        ApiSurface::Anthropic => inject_anthropic_system_context(value, context),
+        ApiSurface::OpenAi => inject_openai_system_context(value, context),
+    }
+}
+
+fn inject_anthropic_system_context(value: &mut Value, context: String) {
+    match value.get_mut("system") {
+        Some(Value::String(existing)) => {
+            if !existing.contains(&context) {
+                existing.push_str("\n\n");
+                existing.push_str(&context);
+            }
+        }
+        Some(Value::Array(items)) => {
+            items.push(json!({ "type": "text", "text": context }));
+        }
+        Some(_) => {}
+        None => {
+            value["system"] = Value::String(context);
+        }
+    }
+}
+
+fn inject_openai_system_context(value: &mut Value, context: String) {
+    let Some(messages) = value.get_mut("messages").and_then(Value::as_array_mut) else {
+        value["messages"] = Value::Array(vec![json!({ "role": "system", "content": context })]);
+        return;
+    };
+    if let Some(Value::Object(first)) = messages.first_mut() {
+        if first.get("role").and_then(Value::as_str) == Some("system") {
+            if let Some(Value::String(content)) = first.get_mut("content") {
+                if !content.contains(&context) {
+                    content.push_str("\n\n");
+                    content.push_str(&context);
+                }
+                return;
+            }
+        }
+    }
+    messages.insert(0, json!({ "role": "system", "content": context }));
+}
+
 async fn normalize_anthropic(
     profile: &GatewayProfile,
     value: &mut Value,
@@ -788,6 +862,60 @@ fn should_forward_header(name: &HeaderName) -> bool {
     )
 }
 
+fn headers_have_api_key(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(header::AUTHORIZATION)
+        .iter()
+        .any(header_value_has_api_key)
+        || headers
+            .get_all("x-api-key")
+            .iter()
+            .any(header_value_has_api_key)
+}
+
+fn is_empty_api_key_header(name: &HeaderName, value: &HeaderValue) -> bool {
+    matches!(name.as_str(), "authorization" | "x-api-key") && !header_value_has_api_key(value)
+}
+
+fn header_value_has_api_key(value: &HeaderValue) -> bool {
+    let Ok(raw) = value.to_str() else {
+        return false;
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return false;
+    }
+    if raw.eq_ignore_ascii_case("bearer") {
+        return false;
+    }
+    if raw.to_ascii_lowercase().starts_with("bearer ") {
+        let token = raw[7..].trim();
+        return token.len() >= 3 && !looks_like_placeholder_api_key(token);
+    }
+    raw.len() >= 3 && !looks_like_placeholder_api_key(raw)
+}
+
+fn looks_like_placeholder_api_key(value: &str) -> bool {
+    let normalized = value
+        .trim()
+        .trim_matches(|ch| ch == '<' || ch == '>' || ch == '"' || ch == '\'')
+        .to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "dummy"
+            | "placeholder"
+            | "changeme"
+            | "change-me"
+            | "your-api-key"
+            | "your_api_key"
+            | "api-key"
+            | "api_key"
+            | "none"
+            | "null"
+            | "undefined"
+    ) || (normalized.contains("your") && normalized.contains("key"))
+}
+
 fn copy_response_headers(target: &mut HeaderMap, source: &HeaderMap) {
     for (name, value) in source {
         if matches!(
@@ -873,10 +1001,7 @@ impl SseTextCoalescer {
             match &mut self.buffered {
                 Some(buffered) => buffered.content.push_str(&content),
                 None => {
-                    self.buffered = Some(BufferedTextEvent {
-                        value,
-                        content,
-                    });
+                    self.buffered = Some(BufferedTextEvent { value, content });
                 }
             }
             if self.should_flush_buffered() {
@@ -918,21 +1043,30 @@ impl SseTextCoalescer {
         };
         let chars = buffered.content.chars().count();
         chars >= 80
-            || buffered
-                .content
-                .chars()
-                .last()
-                .is_some_and(|ch| matches!(ch, '\n' | '。' | '！' | '？' | '，' | '；' | '：' | '.' | '!' | '?' | ',' | ';' | ':'))
+            || buffered.content.chars().last().is_some_and(|ch| {
+                matches!(
+                    ch,
+                    '\n' | '。'
+                        | '！'
+                        | '？'
+                        | '，'
+                        | '；'
+                        | '：'
+                        | '.'
+                        | '!'
+                        | '?'
+                        | ','
+                        | ';'
+                        | ':'
+                )
+            })
     }
 
     fn flush_buffered(&mut self) -> Vec<Bytes> {
         let Some(mut buffered) = self.buffered.take() else {
             return Vec::new();
         };
-        if let Some(content) = buffered
-            .value
-            .pointer_mut("/choices/0/delta/content")
-        {
+        if let Some(content) = buffered.value.pointer_mut("/choices/0/delta/content") {
             *content = Value::String(buffered.content);
         }
         match serde_json::to_string(&buffered.value) {
@@ -1175,10 +1309,7 @@ async fn cache_reasoning_json(cache: &Arc<Mutex<HashMap<String, String>>>, value
                 let reasoning = message.get("reasoning_content").and_then(Value::as_str);
                 let calls = message.get("tool_calls").and_then(Value::as_array);
                 if let (Some(reasoning), Some(calls)) = (reasoning, calls) {
-                    cache.insert(
-                        LATEST_TOOL_REASONING_KEY.to_string(),
-                        reasoning.to_string(),
-                    );
+                    cache.insert(LATEST_TOOL_REASONING_KEY.to_string(), reasoning.to_string());
                     for id in calls
                         .iter()
                         .filter_map(|call| call.get("id").and_then(Value::as_str))
@@ -1196,10 +1327,7 @@ async fn cache_reasoning_json(cache: &Arc<Mutex<HashMap<String, String>>>, value
             .and_then(|item| item.get("thinking").and_then(Value::as_str));
         if let Some(reasoning) = reasoning {
             let mut cache = cache.lock().await;
-            cache.insert(
-                LATEST_TOOL_REASONING_KEY.to_string(),
-                reasoning.to_string(),
-            );
+            cache.insert(LATEST_TOOL_REASONING_KEY.to_string(), reasoning.to_string());
             for id in content
                 .iter()
                 .filter(|item| item.get("type").and_then(Value::as_str) == Some("tool_use"))
@@ -1214,11 +1342,16 @@ async fn cache_reasoning_json(cache: &Arc<Mutex<HashMap<String, String>>>, value
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::GatewayProfile;
+    use crate::models::{AppSettings, GatewayProfile, McpServiceConfig, SkillConfig};
+    use crate::storage::SettingsStore;
     use wiremock::{
-        matchers::{body_json, method, path},
+        matchers::{body_json, header as header_match, method, path},
         Mock, MockServer, ResponseTemplate,
     };
+
+    fn settings_store() -> SettingsStore {
+        SettingsStore::new(tempfile::tempdir().unwrap().path().into())
+    }
 
     #[tokio::test]
     async fn normalizes_adaptive_thinking_for_anthropic() {
@@ -1272,7 +1405,10 @@ mod tests {
             value.pointer("/messages/0/role").and_then(Value::as_str),
             Some("system")
         );
-        assert_eq!(value.get("tool_choice").and_then(Value::as_str), Some("auto"));
+        assert_eq!(
+            value.get("tool_choice").and_then(Value::as_str),
+            Some("auto")
+        );
     }
 
     #[tokio::test]
@@ -1381,6 +1517,66 @@ mod tests {
     }
 
     #[test]
+    fn detects_empty_api_key_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer"));
+        assert!(!headers_have_api_key(&headers));
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer sk-client"),
+        );
+        assert!(headers_have_api_key(&headers));
+
+        let empty = HeaderValue::from_static("   ");
+        assert!(is_empty_api_key_header(&header::AUTHORIZATION, &empty));
+        let placeholder = HeaderValue::from_static("dummy");
+        assert!(is_empty_api_key_header(
+            &HeaderName::from_static("x-api-key"),
+            &placeholder
+        ));
+    }
+
+    #[test]
+    fn injects_settings_context_for_anthropic_and_openai() {
+        let settings = AppSettings {
+            mcp_services: vec![McpServiceConfig {
+                id: "mcp-1".into(),
+                name: "Filesystem".into(),
+                command: "npx".into(),
+                args: "@modelcontextprotocol/server-filesystem".into(),
+                env: String::new(),
+                description: "local files".into(),
+                enabled: true,
+            }],
+            skills: vec![SkillConfig {
+                id: "skill-1".into(),
+                name: "Android Studio".into(),
+                description: "IDE support".into(),
+                instructions: "Prefer Android Studio AI compatible answers.".into(),
+                enabled: true,
+            }],
+        };
+        let mut anthropic = json!({ "model": "deepseek-chat", "messages": [] });
+        inject_settings_context(ApiSurface::Anthropic, &settings, &mut anthropic);
+        assert!(anthropic
+            .get("system")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("Android Studio") && text.contains("Filesystem")));
+
+        let mut openai =
+            json!({ "model": "deepseek-chat", "messages": [{ "role": "user", "content": "hi" }] });
+        inject_settings_context(ApiSurface::OpenAi, &settings, &mut openai);
+        assert_eq!(
+            openai.pointer("/messages/0/role").and_then(Value::as_str),
+            Some("system")
+        );
+        assert!(openai
+            .pointer("/messages/0/content")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("Android Studio") && text.contains("MCP")));
+    }
+
+    #[test]
     fn parses_sse_reasoning_with_partial_chunks_and_done() {
         let mut parser = SseReasoningParser::default();
         parser.push(b"data: {\"delta\":{\"id\":\"toolu_1\",");
@@ -1449,12 +1645,14 @@ mod tests {
     fn flushes_coalesced_text_before_tool_call_sse_frame() {
         let mut coalescer = SseTextCoalescer::default();
         let mut output = Vec::new();
-        output.extend(coalescer.push(
-            b"data: {\"choices\":[{\"delta\":{\"content\":\"Deep\"}}]}\n\n",
-        ));
-        output.extend(coalescer.push(
-            b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\"}]}}]}\n\n",
-        ));
+        output.extend(
+            coalescer.push(b"data: {\"choices\":[{\"delta\":{\"content\":\"Deep\"}}]}\n\n"),
+        );
+        output.extend(
+            coalescer.push(
+                b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\"}]}}]}\n\n",
+            ),
+        );
         let raw = String::from_utf8(
             output
                 .into_iter()
@@ -1471,15 +1669,15 @@ mod tests {
     fn reasoning_delta_does_not_split_coalesced_visible_text() {
         let mut coalescer = SseTextCoalescer::default();
         let mut output = Vec::new();
-        output.extend(coalescer.push(
-            b"data: {\"choices\":[{\"delta\":{\"content\":\"Cl\"}}]}\n\n",
-        ));
-        output.extend(coalescer.push(
-            b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hidden\"}}]}\n\n",
-        ));
-        output.extend(coalescer.push(
-            b"data: {\"choices\":[{\"delta\":{\"content\":\"aude\"}}]}\n\n",
-        ));
+        output
+            .extend(coalescer.push(b"data: {\"choices\":[{\"delta\":{\"content\":\"Cl\"}}]}\n\n"));
+        output.extend(
+            coalescer
+                .push(b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hidden\"}}]}\n\n"),
+        );
+        output.extend(
+            coalescer.push(b"data: {\"choices\":[{\"delta\":{\"content\":\"aude\"}}]}\n\n"),
+        );
         output.extend(coalescer.push(b"data: [DONE]\n\n"));
         let raw = String::from_utf8(
             output
@@ -1499,16 +1697,13 @@ mod tests {
         let mut coalescer = SseTextCoalescer::default();
         let mut output = Vec::new();
         output.extend(coalescer.push(
-            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"之前\"}}]}\n\n"
-                .as_bytes(),
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"之前\"}}]}\n\n".as_bytes(),
         ));
         output.extend(coalescer.push(
-            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"已经\"}}]}\n\n"
-                .as_bytes(),
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"已经\"}}]}\n\n".as_bytes(),
         ));
         output.extend(coalescer.push(
-            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"全面\"}}]}\n\n"
-                .as_bytes(),
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"全面\"}}]}\n\n".as_bytes(),
         ));
         output.extend(coalescer.push(b"data: [DONE]\n\n"));
         let raw = String::from_utf8(
@@ -1546,7 +1741,9 @@ mod tests {
         let mut profile = GatewayProfile::new_default("sse".into(), "SSE".into(), port);
         profile.upstream_base_url = upstream.uri();
         let logs = LogStore::new(tempfile::tempdir().unwrap().path().into());
-        let registry = GatewayRegistry::start(profile, logs).await.unwrap();
+        let registry = GatewayRegistry::start(profile, logs, settings_store())
+            .await
+            .unwrap();
 
         let response = reqwest::Client::new()
             .post(format!("http://127.0.0.1:{port}/v1/messages"))
@@ -1573,7 +1770,9 @@ mod tests {
         let profile = GatewayProfile::new_default("models".into(), "Models".into(), port);
         let tempdir = tempfile::tempdir().unwrap();
         let logs = LogStore::new(tempdir.path().into());
-        let registry = GatewayRegistry::start(profile, logs.clone()).await.unwrap();
+        let registry = GatewayRegistry::start(profile, logs.clone(), settings_store())
+            .await
+            .unwrap();
 
         let response = reqwest::Client::new()
             .get(format!("http://127.0.0.1:{port}/anthropic/v1/models"))
@@ -1606,7 +1805,9 @@ mod tests {
         let profile = GatewayProfile::new_default("bad-route".into(), "Bad Route".into(), port);
         let tempdir = tempfile::tempdir().unwrap();
         let logs = LogStore::new(tempdir.path().into());
-        let registry = GatewayRegistry::start(profile, logs.clone()).await.unwrap();
+        let registry = GatewayRegistry::start(profile, logs.clone(), settings_store())
+            .await
+            .unwrap();
 
         let response = reqwest::Client::new()
             .get(format!("http://127.0.0.1:{port}/anthropic/v1/unknown"))
@@ -1621,6 +1822,73 @@ mod tests {
         assert!(entries
             .iter()
             .any(|entry| entry.message.contains("unsupported gateway route")));
+        registry.stop().await;
+    }
+
+    #[tokio::test]
+    async fn injects_profile_api_key_only_when_request_has_none() {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(header_match("authorization", "Bearer sk-profile"))
+            .and(body_json(json!({
+                "model": "deepseek-v4-pro",
+                "messages": [{ "role": "user", "content": "fallback key" }],
+                "reasoning_effort": "high"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{ "message": { "role": "assistant", "content": "ok" } }]
+            })))
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(header_match("authorization", "Bearer sk-client"))
+            .and(body_json(json!({
+                "model": "deepseek-v4-pro",
+                "messages": [{ "role": "user", "content": "client key" }],
+                "reasoning_effort": "high"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{ "message": { "role": "assistant", "content": "ok" } }]
+            })))
+            .expect(1)
+            .mount(&upstream)
+            .await;
+
+        let port = portpicker::pick_unused_port().unwrap();
+        let mut profile = GatewayProfile::new_default("keys".into(), "Keys".into(), port);
+        profile.upstream_base_url = upstream.uri();
+        profile.api_key = Some("sk-profile".into());
+        let logs = LogStore::new(tempfile::tempdir().unwrap().path().into());
+        let registry = GatewayRegistry::start(profile, logs, settings_store())
+            .await
+            .unwrap();
+        let client = reqwest::Client::new();
+
+        let fallback = client
+            .post(format!("http://127.0.0.1:{port}/chat/completions"))
+            .json(&json!({
+                "model": "deepseek-v4-pro",
+                "messages": [{ "role": "user", "content": "fallback key" }]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(fallback.status(), reqwest::StatusCode::OK);
+
+        let preserved = client
+            .post(format!("http://127.0.0.1:{port}/chat/completions"))
+            .header("authorization", "Bearer sk-client")
+            .json(&json!({
+                "model": "deepseek-v4-pro",
+                "messages": [{ "role": "user", "content": "client key" }]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(preserved.status(), reqwest::StatusCode::OK);
         registry.stop().await;
     }
 
@@ -1677,7 +1945,9 @@ mod tests {
         let mut profile = GatewayProfile::new_default("replay".into(), "Replay".into(), port);
         profile.upstream_base_url = upstream.uri();
         let logs = LogStore::new(tempfile::tempdir().unwrap().path().into());
-        let registry = GatewayRegistry::start(profile, logs).await.unwrap();
+        let registry = GatewayRegistry::start(profile, logs, settings_store())
+            .await
+            .unwrap();
 
         let client = reqwest::Client::new();
         let first = client
@@ -1763,7 +2033,9 @@ mod tests {
             GatewayProfile::new_default("stream-replay".into(), "Stream Replay".into(), port);
         profile.upstream_base_url = upstream.uri();
         let logs = LogStore::new(tempfile::tempdir().unwrap().path().into());
-        let registry = GatewayRegistry::start(profile, logs).await.unwrap();
+        let registry = GatewayRegistry::start(profile, logs, settings_store())
+            .await
+            .unwrap();
 
         let client = reqwest::Client::new();
         let first = client
@@ -1854,7 +2126,9 @@ mod tests {
             GatewayProfile::new_default("early-replay".into(), "Early Replay".into(), port);
         profile.upstream_base_url = upstream.uri();
         let logs = LogStore::new(tempfile::tempdir().unwrap().path().into());
-        let registry = GatewayRegistry::start(profile, logs).await.unwrap();
+        let registry = GatewayRegistry::start(profile, logs, settings_store())
+            .await
+            .unwrap();
 
         let client = reqwest::Client::new();
         let mut first = client
@@ -1900,7 +2174,7 @@ mod tests {
             .unwrap();
         let profile = GatewayProfile::new_default("busy".into(), "Busy".into(), port);
         let logs = LogStore::new(tempfile::tempdir().unwrap().path().into());
-        let error = match GatewayRegistry::start(profile, logs).await {
+        let error = match GatewayRegistry::start(profile, logs, settings_store()).await {
             Ok(registry) => {
                 registry.stop().await;
                 panic!("gateway unexpectedly started on a busy port");

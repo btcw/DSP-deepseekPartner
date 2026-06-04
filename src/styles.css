@@ -19,7 +19,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
   letter-spacing: 0;
 }
@@ -287,12 +288,20 @@ code {
   width: min(760px, 100%);
 }
 
+.settings-modal {
+  width: min(900px, 100%);
+}
+
 .modal-head,
 .log-head {
   align-items: center;
   display: flex;
   justify-content: space-between;
   margin-bottom: 16px;
+}
+
+.modal-head p {
+  margin: 5px 0 0;
 }
 
 .form-grid {
@@ -310,19 +319,36 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   background: #ffffff;
   border: 1px solid #cfd8d3;
   border-radius: 7px;
   color: #1c2924;
-  height: 38px;
   padding: 0 10px;
   width: 100%;
+}
+
+input,
+select {
+  height: 38px;
+}
+
+textarea {
+  line-height: 1.45;
+  min-height: 78px;
+  padding: 9px 10px;
+  resize: vertical;
 }
 
 input:disabled {
   background: #eef2f0;
   color: #697a72;
+}
+
+label small {
+  color: #77877f;
+  line-height: 1.35;
 }
 
 .span-2 {
@@ -348,6 +374,22 @@ legend {
   grid-template-columns: repeat(3, 1fr);
 }
 
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.settings-item {
+  border: 1px solid #e0e8e4;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
 .check {
   align-items: center;
   color: #22312b;
@@ -366,6 +408,10 @@ legend {
   gap: 8px;
   grid-template-columns: auto 1fr auto auto;
   margin-top: 16px;
+}
+
+.compact-actions {
+  grid-template-columns: 1fr auto auto;
 }
 
 .log-panel {

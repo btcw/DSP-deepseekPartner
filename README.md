@@ -4,7 +4,7 @@
 
 DSP-deepseekPartner 是一个独立的 macOS / Windows 桌面应用，用来为 Android Studio AI、Copilot 类第三方插件、Claude Code、Cline、Roo、Kilo 等支持自定义 AI 源的工具提供本地 DeepSeek 代理。
 
-它不是 DeepSeek 官方应用。API Key 由客户端请求携带，应用不会保存或内置 API Key。
+它不是 DeepSeek 官方应用。默认仍由客户端请求携带 API Key；如果你主动在配置里填写 fallback API Key，应用只会在原请求没有有效 Key 时注入，并保存到本机配置中。
 
 ## 它解决什么问题
 
@@ -50,6 +50,8 @@ POST /anthropic/chat/completions
 - 每个配置一个 `127.0.0.1:<port>` 本地服务。
 - 一键启动/停止单个配置或全部配置。
 - 复制 Anthropic/OpenAI 代理链接和 Claude Code 环境变量片段。
+- 配置可选 DeepSeek API Key fallback，兼容不能稳定传 Key 的插件。
+- 独立 Settings 页，可维护 DeepSeek 请求上下文用的 MCP 服务定义和 Skill 指令。
 - 查看实时日志，请求 ID、状态码、延迟和上游错误体。
 - 自动脱敏 `Authorization`、`x-api-key` 和 token-like 内容。
 - 启动后可动态修改名称、上游 URL、模型映射、超时、日志等级和特性开关。
@@ -63,6 +65,7 @@ POST /anthropic/chat/completions
 3. 新增配置：
    - Port: `17777`
    - Upstream URL: `https://api.deepseek.com`
+   - API Key fallback: 可留空；只有客户端请求没有 Key 时才需要填写
    - API Surfaces: Anthropic / OpenAI 按需启用
 4. 点击 Start。
 5. 复制代理链接或环境变量片段到你的 IDE / 插件 / Agent 客户端。
@@ -172,11 +175,24 @@ npm run tauri:build:binary
 
 - macOS Apple Silicon / ARM64 包名包含 `macos-arm64`。
 - Windows x64 包名包含 `windows-x64`。
+- Windows release 版本使用 GUI 子系统，双击启动不会先弹出终端窗口。
 - macOS 包如果没有 Apple Developer ID 签名和 notarization，从浏览器或云盘下载后仍可能出现 Gatekeeper 验证提示。
 
 ## 安全说明
 
 - 默认只监听 `127.0.0.1`。
-- 应用不保存 DeepSeek API Key。
+- 默认不需要在应用里保存 DeepSeek API Key；如果填写 fallback Key，会写入本机应用配置目录，仅在请求缺少有效 Key 时使用。
 - 日志会脱敏敏感 header 和 token-like 内容。
 - 客户端配置仅提供复制片段，不会自动改写 Android Studio、Claude Code、Cline、Roo、Kilo 或其它插件配置文件。
+
+## 版本记录
+
+### 1.1.0
+
+- 新增可选 DeepSeek API Key fallback，客户端请求为空、空 `Bearer` 或常见占位 Key 时自动补充。
+- 新增独立 Settings 页，支持维护 MCP 服务定义和 Skill 指令，并注入到 DeepSeek 请求上下文。
+- Windows release 构建切换为 GUI 子系统，双击启动不再先出现终端窗口。
+
+### 1.0.0
+
+- 首个 macOS ARM64 / Windows x64 桌面应用版本。

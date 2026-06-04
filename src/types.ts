@@ -25,6 +25,7 @@ export interface GatewayProfile {
   name: string;
   port: number;
   upstreamBaseUrl: string;
+  apiKey?: string | null;
   enabledSurfaces: ApiSurface[];
   modelMapping: ModelMapping;
   timeoutSeconds: number;
@@ -50,11 +51,35 @@ export interface LogEntry {
   message: string;
 }
 
+export interface McpServiceConfig {
+  id: string;
+  name: string;
+  command: string;
+  args: string;
+  env: string;
+  description: string;
+  enabled: boolean;
+}
+
+export interface SkillConfig {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  enabled: boolean;
+}
+
+export interface AppSettings {
+  mcpServices: McpServiceConfig[];
+  skills: SkillConfig[];
+}
+
 export const defaultProfile = (port = 17777): GatewayProfile => ({
   id: "",
   name: "DeepSeek Local",
   port,
   upstreamBaseUrl: "https://api.deepseek.com",
+  apiKey: "",
   enabledSurfaces: ["anthropic", "openAi"],
   modelMapping: {
     main: "deepseek-v4-pro[1m]",
@@ -74,4 +99,9 @@ export const defaultProfile = (port = 17777): GatewayProfile => ({
     oneMContextDefaults: true,
     redactSensitiveLogs: true
   }
+});
+
+export const defaultSettings = (): AppSettings => ({
+  mcpServices: [],
+  skills: []
 });

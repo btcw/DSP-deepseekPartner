@@ -4,7 +4,7 @@ Language: [简体中文](../README.md) | **English** | [日本語](README.ja-JP.
 
 DSP-deepseekPartner is an independent macOS and Windows desktop app that provides local DeepSeek proxy profiles for Android Studio AI, Copilot-style third-party plugins, Claude Code, Cline, Roo, Kilo, and other tools that support custom AI sources.
 
-It is not an official DeepSeek application. API keys are supplied by your client requests; the app never stores or embeds API keys.
+It is not an official DeepSeek application. By default, API keys are supplied by your client requests. If you explicitly set a fallback API key in a profile, the app stores it locally and injects it only when the original request has no usable key.
 
 ## What It Solves
 
@@ -50,6 +50,8 @@ POST /anthropic/chat/completions
 - One `127.0.0.1:<port>` service per profile.
 - Start/stop one profile or all profiles.
 - Copy Anthropic/OpenAI proxy URLs and Claude Code environment snippets.
+- Optional DeepSeek API key fallback for plugins that cannot reliably send a key.
+- Dedicated Settings page for MCP service definitions and Skill instructions that are injected as DeepSeek request context.
 - Live logs with request ID, status, latency, and upstream error body.
 - Redaction for `Authorization`, `x-api-key`, and token-like values.
 - Runtime-editable name, upstream URL, model mapping, timeout, log level, and feature toggles.
@@ -63,6 +65,7 @@ POST /anthropic/chat/completions
 3. Add a profile:
    - Port: `17777`
    - Upstream URL: `https://api.deepseek.com`
+   - API key fallback: optional; use it only when your client cannot send a key
    - API Surfaces: enable Anthropic and/or OpenAI as needed
 4. Click Start.
 5. Copy the proxy URL or environment snippet into your IDE, plugin, or agent client.
@@ -172,11 +175,24 @@ npm run tauri:build:binary
 
 - macOS Apple Silicon / ARM64 packages include `macos-arm64` in the filename.
 - Windows x64 packages include `windows-x64` in the filename.
+- Windows release builds use the GUI subsystem, so double-click launch does not open a terminal first.
 - Unsigned and unnotarized macOS builds may still trigger Apple Gatekeeper warnings after download.
 
 ## Safety
 
 - The proxy listens on `127.0.0.1` by default.
-- The app does not store DeepSeek API keys.
+- The app does not require storing DeepSeek API keys by default. If you set a fallback key, it is written to the local app config directory and is used only when a request has no usable key.
 - Logs redact sensitive headers and token-like values.
 - Client setup is copy-only; the app does not automatically modify Android Studio, Claude Code, Cline, Roo, Kilo, or plugin configuration files.
+
+## Changelog
+
+### 1.1.0
+
+- Added optional DeepSeek API key fallback for requests with no usable client key, empty `Bearer`, or common placeholder key values.
+- Added a dedicated Settings page for MCP service definitions and Skill instructions.
+- Switched Windows release builds to the GUI subsystem so launch no longer opens a terminal first.
+
+### 1.0.0
+
+- First macOS ARM64 and Windows x64 desktop release.

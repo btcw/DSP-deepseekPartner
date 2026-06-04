@@ -1,6 +1,6 @@
 [package]
 name = "deepseek-gateway-desktop"
-version = "1.0.0"
+version = "1.1.0"
 description = "A desktop gateway for DeepSeek-compatible agent clients"
 authors = ["DSP-deepseekPartner Contributors"]
 edition = "2021"

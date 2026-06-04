@@ -8,12 +8,23 @@ import {
   Plus,
   Power,
   RefreshCw,
+  Settings,
   Square,
   Trash2,
   X
 } from "lucide-react";
 import { api, copyText } from "./api";
-import { defaultProfile, GatewayProfile, LogEntry, ProfileStatus, ServiceStatusKind } from "./types";
+import {
+  AppSettings,
+  defaultProfile,
+  defaultSettings,
+  GatewayProfile,
+  LogEntry,
+  McpServiceConfig,
+  ProfileStatus,
+  ServiceStatusKind,
+  SkillConfig
+} from "./types";
 
 const featureLabels: Record<keyof GatewayProfile["features"], string> = {
   normalizeAdaptiveThinking: "Adaptive thinking",
@@ -34,6 +45,8 @@ const copyTargets = [
 
 export default function App() {
   const [profiles, setProfiles] = useState<GatewayProfile[]>([]);
+  const [settings, setSettings] = useState<AppSettings>(defaultSettings());
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [statuses, setStatuses] = useState<Record<string, ProfileStatus>>({});
   const [editing, setEditing] = useState<GatewayProfile | null>(null);
   const [logsFor, setLogsFor] = useState<GatewayProfile | null>(null);
@@ -62,9 +75,14 @@ export default function App() {
   async function refresh() {
     try {
       setError("");
-      const [nextProfiles, nextStatuses] = await Promise.all([api.listProfiles(), api.statuses()]);
+      const [nextProfiles, nextStatuses, nextSettings] = await Promise.all([
+        api.listProfiles(),
+        api.statuses(),
+        api.loadSettings()
+      ]);
       setProfiles(nextProfiles);
       setStatuses(indexStatuses(nextStatuses));
+      setSettings(nextSettings);
     } catch (err) {
       setError(String(err));
     }
@@ -116,6 +134,15 @@ export default function App() {
     });
   }
 
+  async function saveGlobalSettings(next: AppSettings) {
+    await runAction("settings", async () => {
+      const saved = await api.saveSettings(next);
+      setSettings(saved);
+      setSettingsOpen(false);
+      setToast("Settings saved");
+    });
+  }
+
   async function remove(profile: GatewayProfile) {
     await runAction(`delete-${profile.id}`, async () => {
       const next = await api.deleteProfile(profile.id);
@@ -158,10 +185,13 @@ export default function App() {
     <main className="shell">
       <header className="topbar">
         <div>
-          <h1>DeepSeek Gateway</h1>
+          <h1>DSP-deepseekPartner</h1>
           <p>Local proxy manager for agent clients.</p>
         </div>
         <div className="topbar-actions">
+          <button className="secondary" onClick={() => setSettingsOpen(true)} disabled={busy !== null}>
+            <Settings size={16} /> Settings
+          </button>
           <button className="secondary" onClick={() => void refresh()} disabled={busy !== null}>
             <RefreshCw size={16} /> Refresh
           </button>
@@ -233,6 +263,15 @@ export default function App() {
         />
       )}
 
+      {settingsOpen && (
+        <SettingsEditor
+          settings={settings}
+          busy={busy}
+          onClose={() => setSettingsOpen(false)}
+          onSave={(next) => void saveGlobalSettings(next)}
+        />
+      )}
+
       {logsFor && (
         <LogPanel
           profile={logsFor}
@@ -289,6 +328,7 @@ function ProfileCard({
         {profile.enabledSurfaces.map((surface) => (
           <span key={surface}>{surface === "openAi" ? "OpenAI" : "Anthropic"}</span>
         ))}
+        {profile.apiKey?.trim() && <span>Profile key fallback</span>}
       </div>
       <div className="feature-list">
         {enabled.slice(0, 4).map((feature) => (
@@ -396,6 +436,16 @@ function ProfileEditor({
               required
             />
           </label>
+          <label className="span-2">
+            DeepSeek API Key fallback
+            <input
+              type="password"
+              value={draft.apiKey ?? ""}
+              placeholder="Optional. Used only when the client request has no API key."
+              onChange={(event) => set("apiKey", event.target.value)}
+            />
+            <small>Leave empty to keep the original client-supplied key flow.</small>
+          </label>
           <label>
             Timeout
             <input
@@ -496,6 +546,215 @@ function ProfileEditor({
   );
 }
 
+function SettingsEditor({
+  settings,
+  busy,
+  onClose,
+  onSave
+}: {
+  settings: AppSettings;
+  busy: string | null;
+  onClose: () => void;
+  onSave: (settings: AppSettings) => void;
+}) {
+  const [draft, setDraft] = useState(settings);
+  const updateMcp = <K extends keyof McpServiceConfig>(index: number, key: K, value: McpServiceConfig[K]) => {
+    setDraft((current) => ({
+      ...current,
+      mcpServices: current.mcpServices.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [key]: value } : item
+      )
+    }));
+  };
+  const updateSkill = <K extends keyof SkillConfig>(index: number, key: K, value: SkillConfig[K]) => {
+    setDraft((current) => ({
+      ...current,
+      skills: current.skills.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [key]: value } : item
+      )
+    }));
+  };
+
+  return (
+    <div className="modal-backdrop">
+      <form
+        className="modal settings-modal"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave(draft);
+        }}
+      >
+        <div className="modal-head">
+          <h2>Settings</h2>
+          <button type="button" className="icon" onClick={onClose} aria-label="Close settings">
+            <X size={18} />
+          </button>
+        </div>
+
+        <fieldset>
+          <legend>MCP services</legend>
+          <div className="settings-list">
+            {draft.mcpServices.length === 0 ? (
+              <p className="muted">No MCP services configured</p>
+            ) : (
+              draft.mcpServices.map((service, index) => (
+                <div className="settings-item" key={service.id || index}>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={service.enabled}
+                      onChange={(event) => updateMcp(index, "enabled", event.target.checked)}
+                    />
+                    Enabled
+                  </label>
+                  <div className="form-grid">
+                    <label>
+                      Name
+                      <input value={service.name} onChange={(event) => updateMcp(index, "name", event.target.value)} />
+                    </label>
+                    <label>
+                      Command
+                      <input
+                        value={service.command}
+                        placeholder="npx, uvx, node, python"
+                        onChange={(event) => updateMcp(index, "command", event.target.value)}
+                      />
+                    </label>
+                    <label className="span-2">
+                      Args
+                      <input
+                        value={service.args}
+                        placeholder="@modelcontextprotocol/server-filesystem /path"
+                        onChange={(event) => updateMcp(index, "args", event.target.value)}
+                      />
+                    </label>
+                    <label className="span-2">
+                      Env
+                      <textarea
+                        value={service.env}
+                        placeholder="KEY=value, one per line"
+                        onChange={(event) => updateMcp(index, "env", event.target.value)}
+                      />
+                    </label>
+                    <label className="span-2">
+                      Description
+                      <textarea
+                        value={service.description}
+                        onChange={(event) => updateMcp(index, "description", event.target.value)}
+                      />
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() =>
+                      setDraft((current) => ({
+                        ...current,
+                        mcpServices: current.mcpServices.filter((_, itemIndex) => itemIndex !== index)
+                      }))
+                    }
+                  >
+                    <Trash2 size={16} /> Delete service
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() =>
+              setDraft((current) => ({
+                ...current,
+                mcpServices: [...current.mcpServices, newMcpService()]
+              }))
+            }
+          >
+            <Plus size={16} /> Add MCP service
+          </button>
+        </fieldset>
+
+        <fieldset>
+          <legend>Skills</legend>
+          <div className="settings-list">
+            {draft.skills.length === 0 ? (
+              <p className="muted">No skills configured</p>
+            ) : (
+              draft.skills.map((skill, index) => (
+                <div className="settings-item" key={skill.id || index}>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={skill.enabled}
+                      onChange={(event) => updateSkill(index, "enabled", event.target.checked)}
+                    />
+                    Enabled
+                  </label>
+                  <div className="form-grid">
+                    <label>
+                      Name
+                      <input value={skill.name} onChange={(event) => updateSkill(index, "name", event.target.value)} />
+                    </label>
+                    <label>
+                      Description
+                      <input
+                        value={skill.description}
+                        onChange={(event) => updateSkill(index, "description", event.target.value)}
+                      />
+                    </label>
+                    <label className="span-2">
+                      Instructions
+                      <textarea
+                        value={skill.instructions}
+                        placeholder="Describe how DeepSeek should behave when this skill applies."
+                        onChange={(event) => updateSkill(index, "instructions", event.target.value)}
+                      />
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() =>
+                      setDraft((current) => ({
+                        ...current,
+                        skills: current.skills.filter((_, itemIndex) => itemIndex !== index)
+                      }))
+                    }
+                  >
+                    <Trash2 size={16} /> Delete skill
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() =>
+              setDraft((current) => ({
+                ...current,
+                skills: [...current.skills, newSkill()]
+              }))
+            }
+          >
+            <Plus size={16} /> Add skill
+          </button>
+        </fieldset>
+
+        <div className="modal-actions compact-actions">
+          <span />
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={busy !== null}>
+            Save settings
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function LogPanel({
   profile,
   logs,
@@ -546,6 +805,32 @@ function LogPanel({
 
 function StatusPill({ status }: { status: ServiceStatusKind }) {
   return <span className={`status ${status}`}>{status}</span>;
+}
+
+function newId(prefix: string) {
+  return `${prefix}-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
+}
+
+function newMcpService(): McpServiceConfig {
+  return {
+    id: newId("mcp"),
+    name: "",
+    command: "",
+    args: "",
+    env: "",
+    description: "",
+    enabled: true
+  };
+}
+
+function newSkill(): SkillConfig {
+  return {
+    id: newId("skill"),
+    name: "",
+    description: "",
+    instructions: "",
+    enabled: true
+  };
 }
 
 function indexStatuses(statuses: ProfileStatus[]) {

@@ -4,7 +4,7 @@
 
 DSP-deepseekPartner は、Android Studio AI、Copilot 系のサードパーティプラグイン、Claude Code、Cline、Roo、Kilo など、カスタム AI ソースに対応したツールを DeepSeek に接続するための、独立した macOS / Windows デスクトップアプリです。
 
-これは DeepSeek 公式アプリではありません。API Key はクライアント側のリクエストで送信され、アプリ内には保存されません。
+これは DeepSeek 公式アプリではありません。デフォルトでは API Key はクライアント側のリクエストで送信されます。プロファイルに fallback API Key を明示的に設定した場合のみ、アプリはそれをローカルに保存し、元のリクエストに有効な Key がないときだけ注入します。
 
 ## 解決する問題
 
@@ -50,6 +50,8 @@ POST /anthropic/chat/completions
 - プロファイルごとに `127.0.0.1:<port>` のサービスを起動。
 - 単一プロファイルまたは全プロファイルの start/stop。
 - Anthropic/OpenAI proxy URL と Claude Code 用 env snippet のコピー。
+- Key を安定して送れないプラグイン向けの任意 DeepSeek API Key fallback。
+- DeepSeek request context に注入する MCP service definition と Skill instruction を管理する独立 Settings ページ。
 - request ID、status、latency、upstream error body を含む live log。
 - `Authorization`、`x-api-key`、token-like value のログマスク。
 - 起動中でも name、upstream URL、model mapping、timeout、log level、feature toggle を編集可能。
@@ -63,6 +65,7 @@ POST /anthropic/chat/completions
 3. プロファイルを追加します。
    - Port: `17777`
    - Upstream URL: `https://api.deepseek.com`
+   - API key fallback: 任意。クライアントが Key を送れない場合だけ設定します
    - API Surfaces: 必要に応じて Anthropic / OpenAI を有効化
 4. Start をクリックします。
 5. proxy URL または env snippet を IDE / plugin / agent client に設定します。
@@ -172,11 +175,24 @@ npm run tauri:build:binary
 
 - macOS Apple Silicon / ARM64 package には `macos-arm64` が含まれます。
 - Windows x64 package には `windows-x64` が含まれます。
+- Windows release build は GUI subsystem を使用するため、ダブルクリック起動時に先に terminal window は開きません。
 - macOS build は Apple Developer ID signing / notarization がない場合、ダウンロード後に Gatekeeper warning が表示されることがあります。
 
 ## Safety
 
 - proxy はデフォルトで `127.0.0.1` のみに bind します。
-- アプリは DeepSeek API key を保存しません。
+- デフォルトでは DeepSeek API key をアプリに保存する必要はありません。fallback Key を設定した場合はローカルのアプリ設定ディレクトリに保存され、有効な Key がないリクエストでのみ使用されます。
 - log では sensitive header と token-like value をマスクします。
 - client setup は copy-only です。Android Studio、Claude Code、Cline、Roo、Kilo、各種 plugin の設定ファイルは自動変更しません。
+
+## Changelog
+
+### 1.1.0
+
+- 有効な client key がない、空の `Bearer`、または一般的な placeholder key のリクエスト向けに、任意の DeepSeek API key fallback を追加。
+- MCP service definition と Skill instruction を管理する独立 Settings ページを追加。
+- Windows release build を GUI subsystem に切り替え、起動時に terminal が先に開かないように変更。
+
+### 1.0.0
+
+- 初回 macOS ARM64 / Windows x64 デスクトップリリース。

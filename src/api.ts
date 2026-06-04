@@ -1,11 +1,13 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { writeText as writeTauriClipboardText } from "@tauri-apps/plugin-clipboard-manager";
-import type { GatewayProfile, LogEntry, ProfileStatus } from "./types";
+import type { AppSettings, GatewayProfile, LogEntry, ProfileStatus } from "./types";
 
 export const api = {
   listProfiles: () => invoke<GatewayProfile[]>("list_profiles"),
   saveProfile: (profile: GatewayProfile) => invoke<GatewayProfile[]>("save_profile", { profile }),
   deleteProfile: (id: string) => invoke<GatewayProfile[]>("delete_profile", { id }),
+  loadSettings: () => invoke<AppSettings>("load_settings"),
+  saveSettings: (settings: AppSettings) => invoke<AppSettings>("save_settings", { settings }),
   startProfile: (id: string) => invoke<ProfileStatus>("start_profile", { id }),
   stopProfile: (id: string) => invoke<ProfileStatus>("stop_profile", { id }),
   startAll: () => invoke<ProfileStatus[]>("start_all"),

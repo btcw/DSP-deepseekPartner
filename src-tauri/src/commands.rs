@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::{
     gateway::{stopped_status, GatewayRegistry},
-    models::{snippets_for, GatewayProfile, LogEntry, ProfileStatus, ProxySnippets},
+    models::{snippets_for, AppSettings, GatewayProfile, LogEntry, ProfileStatus, ProxySnippets},
     AppState,
 };
 
@@ -20,6 +20,7 @@ pub async fn save_profile(
     if profile.id.trim().is_empty() {
         profile.id = Uuid::new_v4().to_string();
     }
+    profile = profile.normalized();
     profile.validate()?;
 
     let existing = state.profiles.find(&profile.id).await.map_err(to_string)?;
@@ -71,9 +72,10 @@ pub async fn start_profile(
         return Ok(existing.status().await);
     }
 
-    let registry = GatewayRegistry::start(profile.clone(), state.logs.clone())
-        .await
-        .map_err(to_string)?;
+    let registry =
+        GatewayRegistry::start(profile.clone(), state.logs.clone(), state.settings.clone())
+            .await
+            .map_err(to_string)?;
     let status = registry.status().await;
     state.gateways.lock().await.insert(id, registry);
     Ok(status)
@@ -132,6 +134,29 @@ pub async fn profile_statuses(state: State<'_, AppState>) -> Result<Vec<ProfileS
         }
     }
     Ok(statuses)
+}
+
+#[tauri::command]
+pub async fn load_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
+    state.settings.load().await.map_err(to_string)
+}
+
+#[tauri::command]
+pub async fn save_settings(
+    state: State<'_, AppState>,
+    mut settings: AppSettings,
+) -> Result<AppSettings, String> {
+    for service in &mut settings.mcp_services {
+        if service.id.trim().is_empty() {
+            service.id = Uuid::new_v4().to_string();
+        }
+    }
+    for skill in &mut settings.skills {
+        if skill.id.trim().is_empty() {
+            skill.id = Uuid::new_v4().to_string();
+        }
+    }
+    state.settings.save(settings).await.map_err(to_string)
 }
 
 #[tauri::command]

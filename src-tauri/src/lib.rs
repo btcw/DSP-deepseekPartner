@@ -8,7 +8,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use gateway::GatewayRegistry;
 use logs::LogStore;
-use storage::ProfileStore;
+use storage::{ProfileStore, SettingsStore};
 use tauri::{Manager, WindowEvent};
 use tokio::sync::Mutex;
 
@@ -17,6 +17,7 @@ pub use models::*;
 #[derive(Clone)]
 pub struct AppState {
     profiles: ProfileStore,
+    settings: SettingsStore,
     logs: LogStore,
     gateways: Arc<Mutex<HashMap<String, GatewayRegistry>>>,
 }
@@ -27,7 +28,8 @@ impl AppState {
         let config_dir = resolver.app_config_dir()?;
         let log_dir = resolver.app_log_dir()?;
         Ok(Self {
-            profiles: ProfileStore::new(config_dir),
+            profiles: ProfileStore::new(config_dir.clone()),
+            settings: SettingsStore::new(config_dir),
             logs: LogStore::new(log_dir),
             gateways: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -50,6 +52,7 @@ pub fn run() {
                                 match GatewayRegistry::start(
                                     profile.clone(),
                                     autostart_state.logs.clone(),
+                                    autostart_state.settings.clone(),
                                 )
                                 .await
                                 {
@@ -107,6 +110,8 @@ pub fn run() {
             commands::start_all,
             commands::stop_all,
             commands::profile_statuses,
+            commands::load_settings,
+            commands::save_settings,
             commands::read_logs,
             commands::clear_logs,
             commands::copy_proxy_text
@@ -120,7 +125,8 @@ pub fn run_headless() {
     runtime.block_on(async {
         let (config_dir, log_dir) =
             default_app_dirs().expect("failed to resolve DSP-deepseekPartner app dirs");
-        let profiles = ProfileStore::new(config_dir);
+        let profiles = ProfileStore::new(config_dir.clone());
+        let settings = SettingsStore::new(config_dir);
         let logs = LogStore::new(log_dir);
         let gateways = Arc::new(Mutex::new(HashMap::<String, GatewayRegistry>::new()));
         let loaded_profiles = profiles
@@ -130,7 +136,7 @@ pub fn run_headless() {
 
         for profile in loaded_profiles {
             let profile_id = profile.id.clone();
-            match GatewayRegistry::start(profile.clone(), logs.clone()).await {
+            match GatewayRegistry::start(profile.clone(), logs.clone(), settings.clone()).await {
                 Ok(registry) => {
                     gateways.lock().await.insert(profile_id, registry);
                 }

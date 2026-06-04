@@ -91,6 +91,8 @@ pub struct GatewayProfile {
     pub name: String,
     pub port: u16,
     pub upstream_base_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
     pub enabled_surfaces: Vec<ApiSurface>,
     pub model_mapping: ModelMapping,
     pub timeout_seconds: u64,
@@ -105,6 +107,7 @@ impl GatewayProfile {
             name,
             port,
             upstream_base_url: "https://api.deepseek.com".into(),
+            api_key: None,
             enabled_surfaces: vec![ApiSurface::Anthropic, ApiSurface::OpenAi],
             model_mapping: ModelMapping::default(),
             timeout_seconds: 120,
@@ -135,6 +138,31 @@ impl GatewayProfile {
         Ok(())
     }
 
+    pub fn normalized(mut self) -> Self {
+        self.name = self.name.trim().to_string();
+        self.upstream_base_url = self
+            .upstream_base_url
+            .trim()
+            .trim_end_matches('/')
+            .to_string();
+        self.api_key = self.api_key.and_then(|key| {
+            let trimmed = key.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
+        self
+    }
+
+    pub fn fallback_api_key(&self) -> Option<&str> {
+        self.api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+    }
+
     pub fn proxy_origin(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
     }
@@ -145,6 +173,161 @@ impl GatewayProfile {
 
     pub fn openai_base_url(&self) -> String {
         self.proxy_origin()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    #[serde(default)]
+    pub mcp_services: Vec<McpServiceConfig>,
+    #[serde(default)]
+    pub skills: Vec<SkillConfig>,
+}
+
+impl AppSettings {
+    pub fn normalized(mut self) -> Self {
+        self.mcp_services = self
+            .mcp_services
+            .into_iter()
+            .map(McpServiceConfig::normalized)
+            .filter(|item| !item.name.is_empty() || !item.command.is_empty())
+            .collect();
+        self.skills = self
+            .skills
+            .into_iter()
+            .map(SkillConfig::normalized)
+            .filter(|item| !item.name.is_empty() || !item.instructions.is_empty())
+            .collect();
+        self
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        for service in &self.mcp_services {
+            if service.enabled && service.name.trim().is_empty() {
+                return Err("Enabled MCP services must have a name".into());
+            }
+            if service.enabled && service.command.trim().is_empty() {
+                return Err("Enabled MCP services must have a command".into());
+            }
+        }
+        for skill in &self.skills {
+            if skill.enabled && skill.name.trim().is_empty() {
+                return Err("Enabled skills must have a name".into());
+            }
+            if skill.enabled && skill.instructions.trim().is_empty() {
+                return Err("Enabled skills must have instructions".into());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn request_context(&self) -> Option<String> {
+        let services = self
+            .mcp_services
+            .iter()
+            .filter(|item| item.enabled)
+            .collect::<Vec<_>>();
+        let skills = self
+            .skills
+            .iter()
+            .filter(|item| item.enabled)
+            .collect::<Vec<_>>();
+        if services.is_empty() && skills.is_empty() {
+            return None;
+        }
+
+        let mut lines = Vec::from([
+            "DSP-deepseekPartner configured context.".to_string(),
+            "Use these entries as user-configured guidance for DeepSeek-compatible clients."
+                .to_string(),
+        ]);
+        if !skills.is_empty() {
+            lines.push("Skills:".to_string());
+            for skill in skills {
+                let description = if skill.description.is_empty() {
+                    String::new()
+                } else {
+                    format!(" - {}", skill.description)
+                };
+                lines.push(format!("- {}{description}", skill.name));
+                lines.push(format!("  Instructions: {}", skill.instructions));
+            }
+        }
+        if !services.is_empty() {
+            lines.push("MCP services:".to_string());
+            lines.push(
+                "These are configured MCP service definitions; tool execution still depends on the client/runtime exposing them."
+                    .to_string(),
+            );
+            for service in services {
+                let args = if service.args.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", service.args)
+                };
+                let description = if service.description.is_empty() {
+                    String::new()
+                } else {
+                    format!(" - {}", service.description)
+                };
+                lines.push(format!(
+                    "- {}: {}{args}{description}",
+                    service.name, service.command
+                ));
+            }
+        }
+        Some(lines.join("\n"))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServiceConfig {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: String,
+    #[serde(default)]
+    pub env: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl McpServiceConfig {
+    fn normalized(mut self) -> Self {
+        self.id = self.id.trim().to_string();
+        self.name = self.name.trim().to_string();
+        self.command = self.command.trim().to_string();
+        self.args = self.args.trim().to_string();
+        self.env = self.env.trim().to_string();
+        self.description = self.description.trim().to_string();
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillConfig {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub instructions: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl SkillConfig {
+    fn normalized(mut self) -> Self {
+        self.id = self.id.trim().to_string();
+        self.name = self.name.trim().to_string();
+        self.description = self.description.trim().to_string();
+        self.instructions = self.instructions.trim().to_string();
+        self
     }
 }
 
